@@ -33,6 +33,17 @@ skills/<skill-name>/
 Prompt-only skills carry just `SKILL.md` and `references/`.
 See [`skills/README.md`](skills/README.md) for the layout policy.
 
+## Deployment
+
+[`deploy/hf2api/`](deploy/hf2api/) holds the Docker Compose stack that serves the
+two `hf2api` skills as OpenAI-compatible local endpoints behind a gluetun VPN.
+It mounts the skill source directly out of `skills/`, so the skill, its source,
+and its deployment all live together:
+
+```bash
+cd deploy/hf2api && cp .env.example .env && docker compose up -d
+```
+
 ## Install
 
 Point your skill manager at this repo, or symlink a skill straight into your

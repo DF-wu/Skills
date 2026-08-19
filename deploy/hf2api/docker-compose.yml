@@ -1,0 +1,93 @@
+# Standalone deployment (includes gluetun).
+# For production on axolotl, see myServices/hf2api/docker-compose.yml
+# (uses existing gluetun-proxy, no separate gluetun).
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: hf2api-gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      VPN_SERVICE_PROVIDER: ${VPN_PROVIDER:-}
+      VPN_TYPE: ${VPN_TYPE:-wireguard}
+      WIREGUARD_PRIVATE_KEY: ${WG_PRIVATE_KEY:-}
+      WIREGUARD_ADDRESSES: ${WG_ADDRESSES:-}
+      SERVER_CITIES: ${VPN_CITY:-}
+    ports:
+      - 127.0.0.1:8820:8820
+      - 127.0.0.1:8830:8830
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "https://ipinfo.io"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  qwen3-asr-tts-hf2api:
+    image: python:3.13-alpine
+    container_name: qwen3-asr-tts-hf2api
+    network_mode: "service:gluetun"
+    volumes:
+      - ../../skills/qwen3-asr-tts-hf2api:/app
+    working_dir: /app
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        pip install --no-cache-dir -q . &&
+        exec python -m qwen3_asr_tts_hf2api
+    environment:
+      TTS_BASE_URL: ${TTS_BASE_URL:-https://qwen-qwen3-tts-demo.hf.space}
+      ASR_BASE_URL: ${ASR_BASE_URL:-https://qwen-qwen3-asr.hf.space}
+      PORT: "8820"
+      TZ: ${TZ:-Asia/Taipei}
+      API_KEY: ${API_KEY:-}
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8820/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  vits-tts-hf2api:
+    image: python:3.13-alpine
+    container_name: vits-tts-hf2api
+    network_mode: "service:gluetun"
+    volumes:
+      - ../../skills/vits-tts-hf2api:/app
+    working_dir: /app
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        pip install --no-cache-dir -q . &&
+        exec python -m vits_tts_hf2api
+    environment:
+      BASE_URL: ${VITS_BASE_URL:-https://ikechan8370-vits-uma-genshin-honkai.hf.space}
+      BACKUP_REST_URL_1: ${VITS_BACKUP_URL_1:-https://AHJoong-vits-uma-genshin-honkai.hf.space}
+      BACKUP_REST_URL_2: ${VITS_BACKUP_URL_2:-https://OldSecond-vits-uma-genshin-honkai.hf.space}
+      FALLBACK_BASE_URL: ${VITS_FALLBACK_URL:-https://zomehwh-vits-uma-genshin-honkai.hf.space}
+      FALLBACK_WS_URL: ${VITS_WS_URL:-https://zomehwh-vits-uma-genshin-honkai.hf.space}
+      VITS_MODELS_URL: ${VITS_MODELS_URL:-https://zomehwh-vits-models-genshin-bh3.hf.space}
+      PORT: "8830"
+      TZ: ${TZ:-Asia/Taipei}
+      API_KEY: ${API_KEY:-}
+      MAX_TEXT_LENGTH: ${MAX_TEXT_LENGTH:-500}
+      MAX_RETRIES: "3"
+      RETRY_DELAY: "1.0"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8830/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
