@@ -1,6 +1,6 @@
 ---
 name: qwen3-asr-tts-hf2api
-description: "Qwen3 TTS (48 voices) and ASR (32 languages) via HuggingFace Spaces. Use when you need text-to-speech, speech-to-text, voice synthesis, or audio transcription. Includes ready-to-use bash functions and Python functions. Trigger on TTS, STT, ASR, speech, voice, audio generation, transcription."
+description: "Qwen3 TTS (49 voices, 11 text languages) and ASR (31 languages) via HuggingFace Spaces. Use when you need text-to-speech, speech-to-text, voice synthesis, or audio transcription. Includes ready-to-use bash functions and Python functions. Trigger on TTS, STT, ASR, speech, voice, audio generation, transcription."
 ---
 
 # Qwen3 TTS & ASR

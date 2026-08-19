@@ -1,18 +1,19 @@
 {
-  "description": "Qwen3 TTS Demo language options",
+  "description": "Qwen3 TTS Demo text-language options. Bilingual 'English / 中文' form — note the Chinese names are TTS-style (e.g. 'Japanese / 日语', NOT '日本語'). Do not reuse these values for ASR.",
   "source": "Qwen/Qwen3-TTS-Demo",
-  "count": 12,
+  "verified": "2026-08-19 against live Space /config",
+  "count": 11,
   "languages": {
     "auto": "Auto / 自动",
-    "zh": "Chinese / 中文",
     "en": "English / 英文",
-    "ja": "Japanese / 日本語",
-    "ko": "Korean / 韓語",
-    "de": "German / Deutsch",
-    "fr": "French / Français",
-    "ru": "Russian / Русский",
-    "pt": "Portuguese / Português",
-    "es": "Spanish / Español",
-    "it": "Italian / Italiano"
+    "zh": "Chinese / 中文",
+    "de": "German / 德语",
+    "it": "Italian / 意大利语",
+    "pt": "Portuguese / 葡萄牙语",
+    "es": "Spanish / 西班牙语",
+    "ja": "Japanese / 日语",
+    "ko": "Korean / 韩语",
+    "fr": "French / 法语",
+    "ru": "Russian / 俄语"
   }
 }

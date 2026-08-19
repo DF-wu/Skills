@@ -1,7 +1,8 @@
 {
-  "description": "Qwen3 TTS Demo voice options",
+  "description": "Qwen3 TTS Demo voice options. Pass the full display string (e.g. 'Cherry / 芊悦') as the Gradio dropdown value.",
   "source": "Qwen/Qwen3-TTS-Demo",
-  "count": 48,
+  "verified": "2026-08-19 against live Space /config",
+  "count": 49,
   "voices": {
     "cherry": "Cherry / 芊悦",
     "serena": "Serena / 苏瑶",
