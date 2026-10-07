@@ -637,10 +637,18 @@ When a target blocks you, identify the layer before choosing a fix.
 | 403 with a valid signature | Wrong canonicalization | Compare two near-identical requests |
 | Signature accepted once, then rejected | Nonce replay protection | Fresh nonce per request |
 | **429 with `x-kpsdk-*` headers** | **Kasada proof of work** | Solve the PoW; do not just retry |
-| **Bare 403 after a 429** | Kasada reputation burned | The IP is spent; changing technique will not help |
+| **Bare 403/429 with no body at all** | Kasada reputation burned | The IP is spent; changing technique will not help |
+| **HTTP 200 but wrong content** | **Imperva** 200-disguised block page | Do not trust the status code; validate the payload |
+| **HTTP 200 with a poisoned body on one endpoint** | **F5 Shape** transform-200 | Policy is per-endpoint; the homepage being clean means nothing |
+| **428 Precondition Required** | Akamai sec-cpt | Forced wait + PoW; handle the second layer |
+| **429/403 with no vendor fingerprint at all** | Netacea / Cequence (agentless) | No payload to reverse; the only lever is behaviour |
 | **Blocked only after setting a custom UA** | UA contradicts the TLS profile | Check `summary.user_agent` from `fingerprint_probe.py` |
-| HTTP 402 | Commercial gate | Pay, license, or stop |
+| HTTP 402 / `crawler-*` | Commercial gate | Pay, license, or stop |
 | Works for minutes, then dies | Session/token TTL | Implement refresh lifecycle |
+
+**Three status codes that actively lie**: Imperva's 200-disguised block, F5 Shape's
+200-with-poisoned-body, and Kasada's body-less rejection. In all three, the status code
+tells you the opposite of the truth.
 
 ## Verification Checklist (before scaling)
 
@@ -678,9 +686,9 @@ When a target blocks you, identify the layer before choosing a fix.
 - `references/anti-detection.md` — detection surfaces, anti-detect browser ladder, coherence checklist
 - `references/tls-http-fingerprinting.md` — **JA3/JA3N/JA4/Akamai H2 fingerprint, three-layer alignment**
 - `references/traffic-camouflage.md` — **the camouflage stack layer by layer, GREASE, HTTP/2 SETTINGS, TCP-stack fingerprinting, domain fronting (T1090.004), temporal signals, defender's detection checklist**
-- `references/global-anti-bot-vendors.md` — **one-response vendor identification, per-vendor mechanism and difficulty tier, public benchmark data, the 2025–2026 "agent trust" shift**
+- `references/global-anti-bot-vendors.md` — **one-response vendor identification, per-vendor mechanism and difficulty tier, agentless vendors, public benchmark data with its methodological caveats, the 2025–2026 "agent trust" shift and Web Bot Auth**
 - `references/anti-bot-bypass.md` — vendor-by-vendor playbooks
-- `references/frontier-anti-bot-2026.md` — **Cloudflare AI Labyrinth / Pay Per Crawl / Content Signals, Anubis PoW, CDP detection**
+- `references/frontier-anti-bot-2026.md` — **Cloudflare AI Labyrinth / Pay Per Crawl / Content Signals, the 402 standard family (x402, AWS WAF Monetize, RSL), Anubis PoW, CDP detection**
 
 ### Language ecosystems
 

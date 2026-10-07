@@ -21,23 +21,38 @@
 
 来源：https://blog.cloudflare.com/ai-labyrinth
 
-### Pay Per Crawl（2025-07-01 私有 beta）
+### Pay Per Crawl（2025-07-01 私有 beta → 已 GA）
 
 **机制**：让内容方对爬取**收费或拒绝**，通过 HTTP **402 Payment Required** 表达。
 
 | 项 | 值 |
 |---|---|
-| 上线 | 2025-07-01（**仍为 private beta，未 GA**） |
+| 上线 | 2025-07-01 私测；**2025-08-27** AI Audit 更名 AI Crawl Control 并 GA，同时引入自定义 HTTP 402 响应（付费计划） |
 | 支付方 | Stripe（merchant-of-record） |
 | 三种策略 | allow / charge / block |
-| 价格头 | `crawler-price`、`crawler-exact-price`、`crawler-max-price`、`crawler-charged` |
-| 身份验证 | **Web Bot Auth**（HTTP message signatures） |
+| 价格头 | `crawler-price`、`crawler-exact-price`、`crawler-max-price`、`crawler-charged`、`crawler-error` |
+| 协议规则 | `crawler-exact-price` 与 `crawler-max-price` **一次请求只允许其一**；同时出现或同时缺席均回 402 |
+| 身份验证 | **Web Bot Auth**（HTTP message signatures）；2026-04-17 起支付头必须纳入 `signature-input` 签名组件 |
 | 发现 API | `GET https://crawlers-api.ai-audit.cfdata.org/charged_zones` |
 | 免费路径 | `/robots.txt`、`/sitemap.xml`、`/security.txt`、`/.well-known/security.txt`、`/crawlers.json` |
+| 路由顺序 | 支付决策运行在既有 WAF / 限流 / bot management 策略**之后** |
+| 计费语义 | 成功响应带 `crawler-charged` 标明实际计费额；**错误响应不计费** |
 
 **对抗要点**：收到 **402** 不应盲目重试——这是显式的商业拒绝信号。检查 `crawler-*` 头判断是否已被计费。
 
-来源：https://blog.cloudflare.com/introducing-pay-per-crawl 、https://developers.cloudflare.com/changelog/2025-12-10-pay-per-crawl-enhancements
+**已形成的事实标准族**（不再是单一厂商行为）：
+
+| 方案 | 时间 | 形态 |
+|---|---|---|
+| **Cloudflare Pay Per Crawl** | 2025-07 → GA 2025-08-27 | 402 + `crawler-*` 头；Stripe 结算 |
+| **x402 Foundation** | 2025-09-23（Cloudflare + Coinbase 联合发起） | 402 + 机器可读支付要求 `PAYMENT-REQUIRED`；客户端用 `PAYMENT-SIGNATURE` 重试；网络无关（EVM/Solana）；**facilitator** 负责验证与结算 |
+| **AWS WAF AI Traffic Monetization** | 2026-06 | Bot Control 新增 **Monetize** 动作；未付请求收 402 + 清单（每请求价格 USDC、可接受网络 **Base 与 Solana**、收款地址、许可条款），**格式即 x402**；付款后边缘签发作用域受限的访问 token |
+| **Content Signals** | 2025-09-24 | robots.txt 扩展，CC0 |
+| **RSL (Really Simple Licensing)** | — | 写在 robots.txt 中的 XML 许可标准，由 RSL Collective 管理；**与 CDN 无关**，联盟制 |
+
+Cloudflare 方数据点：其网络上站点**每天发出超过 10 亿个 HTTP 402 响应码**给 bot、crawler 与 agent。法律状态：x402 目前是**技术开放标准**，尚非被监管认可的支付系统。
+
+来源：https://blog.cloudflare.com/introducing-pay-per-crawl 、https://developers.cloudflare.com/ai-crawl-control/changelog 、https://developers.cloudflare.com/ai-crawl-control/features/pay-per-crawl/what-is-pay-per-crawl 、https://www.cloudflare.com/press/press-releases/2025/cloudflare-and-coinbase-will-launch-x402-foundation 、https://aws.amazon.com/about-aws/whats-new/2026/06/aws-waf-ai-traffic-monetization
 
 ### Content Signals Policy（2025-09-24）
 
@@ -185,23 +200,30 @@
 
 **技术趋势**：
 
-1. **门槛从「识别」转向「成本」**——Anubis 用 PoW 让爬取变贵，Pay Per Crawl 让爬取变成付费谈判。这类机制**不是可「绕过」的检测**，而是经济博弈
+1. **门槛从「识别」转向「成本」**——Anubis 用 PoW 让爬取变贵，Pay Per Crawl / x402 / AWS WAF Monetize 让爬取变成付费谈判。这类机制**不是可「绕过」的检测**，而是经济博弈
 2. **AI 爬虫专用对抗**——AI Labyrinth 说明防护方开始区分「AI 训练爬虫」与「传统爬虫」，并对其投喂污染数据
 3. **PoW 向内存困难算法演进**——Argon2id + WASM 让算力优势被削弱
 4. **协议级偏好声明**——Content Signals 把 robots.txt 从「协议」变成「法律权利保留的表达」，与 DSM Art. 4(3) 对齐
+5. **身份层标准化**——Web Bot Auth（RFC 9421 + Ed25519）让「合法 agent」可以自证身份，从而把「未知 agent」默认当作可疑。这是 2026 年最重要的结构性变化：**验证从「你是不是人类」转向「你有没有签名」**
 
 **实务建议**：
 
-- 遇到 402 → 停止重试，评估商业授权
+- 遇到 402 → 停止重试，评估商业授权。**402 已有事实标准族（Cloudflare / x402 / AWS WAF Monetize），不是孤例**
 - 遇到 PoW → 用原生实现解，不要用浏览器 JS
 - 遇到 AI Labyrinth 特征 → 丢弃页面并标记
 - 遇到 `ai-train`/`ai-input` 信号被保留 → 法律层面需重新评估，不只是技术问题
+- 遇到 `Signature` / `Signature-Input` / `Signature-Agent` → 这是 **Web Bot Auth**，是身份声明而非挑战；没有签名的 agent 会被默认归类为可疑
 
 ## 来源
 
 - AI Labyrinth：https://blog.cloudflare.com/ai-labyrinth
 - Pay Per Crawl：https://blog.cloudflare.com/introducing-pay-per-crawl
-- Pay Per Crawl 增强：https://developers.cloudflare.com/changelog/2025-12-10-pay-per-crawl-enhancements
+- Pay Per Crawl 协议细节：https://developers.cloudflare.com/ai-crawl-control/features/pay-per-crawl/what-is-pay-per-crawl
+- AI Crawl Control 变更记录：https://developers.cloudflare.com/ai-crawl-control/changelog
+- x402 Foundation（Cloudflare + Coinbase）：https://www.cloudflare.com/press/press-releases/2025/cloudflare-and-coinbase-will-launch-x402-foundation
+- AWS WAF AI Traffic Monetization：https://aws.amazon.com/about-aws/whats-new/2026/06/aws-waf-ai-traffic-monetization
+- Web Bot Auth：https://developers.cloudflare.com/bots/reference/bot-verification/web-bot-auth
+- Cloudflare Verified Bots with cryptography：https://blog.cloudflare.com/verified-bots-with-cryptography
 - Content Signals Policy：https://blog.cloudflare.com/content-signals-policy
 - Anubis：https://github.com/techaroHQ/anubis
 - Anubis 工作原理：https://anubis.techaro.lol/docs/design/how-anubis-works/
