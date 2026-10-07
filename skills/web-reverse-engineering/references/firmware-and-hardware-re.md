@@ -57,21 +57,54 @@ SOIC-8 clip on the flash chip with `flashrom -p ch341a_spi -r dump.bin`.
 
 ### Secure boot and readout protection
 
-These are what stop acquisition, and each has a specific character:
+These are what stop acquisition. **The most important 2025–2026 development is that
+several long-assumed "locked means safe" protections have documented bypasses**, so treat
+the table below as a starting point for verification, not as a guarantee.
 
-| Protection | Device | Behaviour | Research approach |
+| Protection | Device | Status | Research approach |
 |---|---|---|---|
-| **STM32 RDP** | STM32 | Level 1 blocks debug reads; level 2 is permanent | RDP level 1 has known bypasses on some families; level 2 is one-way |
-| **nRF52 APPROTECT** | Nordic nRF52 | Blocks debug access | Known bypasses via voltage glitching on some revisions |
-| **ESP32 secure boot + flash encryption** | Espressif | Encrypted flash, signed bootloader | eFuse-based; irreversible once enabled |
+| **ESP32 ECDSA Secure Boot** | ESP32-H2/C5/C61/P4/S31 | **Active, unfixed defect** | Espressif advisory **AR2026-006 (V1.1, 2026-07-28)**: the ROM ECDSA secure boot does **not validate that the signature components r and s fall within the curve order**, so an invalid signature can be judged valid. ESP32-C5 additionally has an uninitialized ECDSA peripheral in ROM. **No software fix on current silicon**; hardware fix awaits a future tape-out. C2/C6 are unaffected (no ECDSA peripheral). Mitigation for new production: use RSA secure boot. ESP32-C61 has ECDSA only and no application-level workaround. |
+| **STM32 RDP** | STM32 | **Level 2 is not an absolute barrier** | Level 1 has public glitching bypasses. For level 2: a boot-time voltage glitch can cause the RDP byte to be misread as level 1 (reopening debug and the system bootloader), then a second glitch skips the level-1 read check. See SECGlitcher (SEC Consult, 2024-01), Anvil Secure's end-to-end demo (2025-04), VoidStar's EMFI variant (CanSecWest 2024), and `joegrand/stm32-fault-injection`. Separately, **STM32-TraceRip** (Hardwear.io USA 2025) claims full application flash recovery on STM32G0 by observing CPU state during normal execution — no glitching or UV. ST's own **TN1489 (2023-10)** states that parts without SESIP/PSA certification covering physical attacks may be affected by FI, side-channel, and invasive attacks. |
+| **nRF52 APPROTECT** | Nordic nRF52 | Bypassed on early revisions | LimitedResults' 2020 voltage glitch perturbs APPROTECT during boot and reopens SWD (Nordic advisory IN-133 / CVE-2020-27211). Later nRF52 revisions default it on and add a second software+hardware lock. |
+| **nRF54L** | Nordic nRF54L | Hardened, but the vendor does not claim certainty | TAMPC glitch detection (voltage/EM timing violations → reset), a dedicated GLITCHDET supply pin, signal protectors, optional active shielding, and CRACEN (DPA masking plus fault checks on public-key operations). `UICR.ERASEPROTECT` blocks CTRL-AP `ERASEALL` recovery. **Nordic itself states glitch detection is not deterministic**, and a SySS 2025 report found the detector did not reliably block some EMFI. nRF54H20 uses lifecycle states rather than APPROTECT. The public PSA certificate (2026-01, SDK 3.1) is **Level 1, not Level 3**. |
+| **ESP32 flash encryption + secure boot** | ESP32 (V3) | Bypassed | USENIX WOOT 2024 (Delvaux): a single EM glitch bypasses both secure boot and flash encryption simultaneously, entering ROM download mode to export decrypted flash. Espressif **AR2023-007** documents a CPA + FI combination on ESP32-C3/C6; there is also a public reproduction of a crowbar voltage glitch bypassing encrypted secure boot. |
+| **MediaTek** | MediaTek SoCs | Multiple findings | The `bl2_ext` verification gap (Fenrir, ~2025): when `seccfg` is unlocked the Preloader can skip the `bl2_ext` signature check, but `bl2_ext` is what performs downstream verification at EL3 — so the trust chain collapses. Confirmed on Nothing Phone (2a) and CMF Phone 1. DA vulnerabilities CVE-2025-20656 (OOB write) and CVE-2025-20658 (privilege bypass), disclosed 2025-04. Hardwear.io NL 2025 performed EMFI on MT6878 to dump BootROM and reach EL3 code execution. **BootROM defects cannot be fixed by OTA.** |
+| **Qualcomm** | Qualcomm SoCs | CVE-2026-25262 | PBL writes to an arbitrary address while processing a crafted ELF, related to EDL Sahara. Affects MDM9x07/9x45/9x65, MSM8909/8916/8952, SDX50. Reported 2025-03; Kaspersky presented related BootROM/Sahara analysis at Black Hat Asia 2026. Separately, **AVBTestKeyInTheWild** (EWSN/SPICES 2025) found real vendor firmware shipping with residual AOSP AVB test keys — the published private key lets images be re-signed and pass AVB. That is a signing/supply-chain failure, not a cryptographic break. |
 | **ESP8266** | Espressif | Generally readable | Straightforward dump in most cases |
-| **Broadcom / MediaTek / Qualcomm Secure Boot** | SoCs | Chain of trust from ROM | Vendor-specific; often requires a signed exploit or a glitch |
-| **Fuses / OTP** | Various | One-time programmable lock bits | Irreversible; if blown, the route is glitching or decapsulation |
+| **Broadcom** | Broadcom SoCs | **Not established** | No first-hand 2025–2026 material of comparable grade was located. **Absence of evidence is not evidence of absence** — treat as unknown rather than secure. |
+| **Fuses / OTP** | Various | One-time programmable | Irreversible; the route is glitching or decapsulation |
+
+**The operational consequence, stated plainly**: an assumption of the form "RDP2 is set /
+APPROTECT is locked / the eFuse is blown, therefore the device is secure" does not hold for
+parts that lack SESIP/PSA certification covering physical attacks. Verify per silicon
+revision against current advisories rather than reasoning from the feature name.
 
 The honest position: **if secure boot is properly implemented and the debug interface is
 permanently locked, you are in glitching or decapsulation territory**, which is a
 specialist discipline with real equipment cost. Do not promise a client that a locked
 device will be readable.
+
+### Firmware update formats
+
+Two standardised lines worth recognising before you treat an update package as a black box:
+
+- **IETF SUIT** — RFC 9019 (architecture), RFC 9124 (information model), current
+  serialisation is the `draft-ietf-suit-manifest` CBOR manifest. A SUIT Envelope is the
+  manifest digest plus a COSE_Sign/Sign1/Mac/Mac0 structure. Encrypted payloads are
+  covered by `draft-ietf-suit-firmware-encryption`, and **changing the encryption structure
+  requires re-signing**.
+- **MCUboot** — a 32-byte little-endian header with magic `0x96f3b83d`, TLV info magics
+  `0x6907` / `0x6908`, and a signature covering header + payload + protected TLV.
+  `imgtool` signs and parses.
+
+Vendor-private containers have no common 2025 format and must be identified per device.
+Note also that a 2026 *Computers & Security* study of ~50 consumer devices still found
+plaintext HTTP update channels in many of them — **capturing an update is frequently less
+work than reading a chip.**
+
+Sources: https://www.rfc-editor.org/rfc/rfc9019 ,
+https://datatracker.ietf.org/doc/draft-ietf-suit-manifest/ ,
+https://github.com/mcu-tools/mcuboot/blob/main/docs/design.md
 
 ---
 
@@ -79,16 +112,18 @@ device will be readable.
 
 ### Carving and unpacking
 
-| Tool | Status | Notes |
+| Tool | Status (verified 2026-10) | Notes |
 |---|---|---|
-| **binwalk** | **v3 is a Rust rewrite** | Significantly faster and more accurate than v2. The CLI differs from v2 in places — check your version. The `ospg/binwalk` v2 fork declared **EOL at 2025-12-12**. |
-| **unblob** | Active | 30+ formats. Reported to outperform binwalk 2.x in both speed and accuracy in independent testing. Has ~20 dependencies (binwalk has none required). Detects fewer file types than binwalk. |
-| **FACT** | Active through 2024 | Firmware Analysis and Comparison Tool. Full-featured static analysis framework with plug-ins and version comparison. Requires Python 3.10–3.12. |
-| **EMBA** | Active | The firmware security analyzer. SBOM generation with `cve-bin-tool` integration, VEX support, complies with the 2025 CISA minimum SBOM elements. Integrated a Binwalk v3 + unblob extraction pipeline (Dec 2024) with parallel execution. |
-| **EMBArk** | Released 2024 | Enterprise firmware scanning environment; the GUI/enterprise layer over EMBA. |
-| **Firmwalker / Trommel** | Mature | Simple "search the extracted filesystem for interesting things" scripts. Still useful. |
-| **Firmadyne / FirmAE** | Firmadyne is dated; FirmAE is the improved fork | Automated emulation and pentesting of firmware. |
-| **unblob + binwalk together** | — | Common practical approach: run unblob first (better extraction), fall back to binwalk for types unblob does not cover. |
+| **binwalk** | **Upstream near-stalled** | Latest tag is still **v3.1.0 (2024-10-31)**; master commits continue (2026-08) and `Cargo.toml` says 3.1.1, but **it was never tagged or published to crates.io**. Issue #935 (2026-02-13, "Project status and a new fork") says the project is unmaintained. |
+| **binwalk-ng** | **Active, v4.0.0 (2026-09-29)** | Community fork (crate `binwalk-ng`, CLI still `binwalk`). Adds lzfse/zstd/lz4/rar/tar/SREC/Fritz!Box EVA/Broadcom ProgramStore handlers, mmap, rayon parallelism, and symlink-escape hardening. **The fork's ownership status is unconfirmed** — there is no handover announcement from ReFirmLabs/devttys0. |
+| **unblob** | **Active, 26.6.4 (2026-06-04)** | YY.M.D versioning; main active through 2026-10. Adds minix, BTRFS stream, UFS1-2, Moxa FRM, Tesla Wall Connector SBFH, and an Airoha handler. ~20 external dependencies (binwalk needs none). |
+| **sasquatch** | **Use the onekey-sec fork** | `devttys0/sasquatch` is stalled (last commit 2021-03, still patches squashfs-tools 4.3, many unmerged PRs). **`onekey-sec/sasquatch` is the maintained successor** (sasquatch-v4.5.1-6, 2026-01-27) — and it is what unblob installs. |
+| **FACT** | **Active, v4.4.1 (2026-09-14)** | Fraunhofer FKIE. Note: the `FACT_docker` repo README states it is **currently unmaintained** — use the script install or Vagrant instead. Requires Python 3.10–3.12. |
+| **EMBA** | **Active, v2.0.4 (2026-09-21)** | Notably **migrated from binwalk to binwalk-ng**. v2.0.0 (2025-12) claims 95% emulation success versus Firmadyne/FirmAE. SBOM generation with `cve-bin-tool`, VEX support, CISA minimum SBOM elements. |
+| **firmwalker** | **Repository gone** | `craigz28/firmwalker` returns **HTTP 404**; the 2026-01-09 Wayback snapshot is still viewable (~1.2k stars). Use the `scriptingxss/firmwalker` or `zhibx/firmwalker_pro` mirrors. |
+| **Trommel** | **Archived 2024-05-13** | `CERTCC/trommel` (CMU SEI — not CISA) is read-only; last commit 2020-06-23. |
+| **Firmadyne / FirmAE** | Firmadyne stalled; FirmAE maintained | Firmadyne's last commit was 2024-07. FirmAE's only tag is still v1.0 (2020) with dependency/fix commits through 2026-06 — maintenance, not new releases. EMBA's wiki states neither is actively maintained. |
+| **Practical order** | — | **unblob first, binwalk-ng to fill gaps.** |
 
 **Do not trust a single extractor.** Filesystem extraction fails silently more often than
 it fails loudly — you get a partial filesystem and do not notice the missing files. Verify
@@ -137,14 +172,14 @@ Practical workflow:
 Emulation is how you get dynamic analysis without hardware, and it fails in predictable
 ways.
 
-| Tool | Scope |
-|---|---|
-| **QEMU (system mode)** | Full system emulation; the basis of most firmware emulation |
-| **Firmadyne** | Automated QEMU-based firmware emulation; dated but historically important |
-| **FirmAE** | Improved fork — better success rate on real firmware |
-| **Qiling** | Emulation framework with OS-level API emulation; good for user-mode and partial system |
-| **unicorn** | CPU-only emulation; you provide the OS semantics |
-| **EMBA's emulation** | Integrated into the analysis pipeline |
+| Tool | Status (verified 2026-10) | Scope |
+|---|---|---|
+| **QEMU (system mode)** | Active, 11.1.2 (2026-09-28) | Full system emulation; the basis of most firmware emulation |
+| **Firmadyne** | **Stalled** — no commits after 2024-07 | Automated QEMU-based firmware emulation; historically important |
+| **FirmAE** | Maintained but no new release (only tag still v1.0 from 2020; fix commits through 2026-06) | Better success rate on real firmware than Firmadyne |
+| **Qiling** | Active, v1.4.11 (2026-09-06) | OS-level API emulation; user-mode and partial system. Recently added RISC-V debugging/qdb and `clone3` support |
+| **unicorn** | Release lagging (2.1.4, 2025-09) but `dev` active through 2026-08 | CPU-only emulation; you provide the OS semantics |
+| **EMBA's emulation** | Active | Integrated into the analysis pipeline |
 
 **Common failure modes** (expect these, they are the norm rather than the exception):
 
@@ -167,15 +202,35 @@ interfaces. It is more manual but far more likely to work.
 
 | RTOS | Fingerprint |
 |---|---|
-| **FreeRTOS** | `xTaskCreate`, `vTaskDelay`, `pvPortMalloc` symbol strings; `configASSERT` |
-| **Zephyr** | `z_` prefixed symbols, `k_thread`, device tree strings |
-| **VxWorks** | `wdb`, `usrRoot`, `taskSpawn`, `WIND_` version strings |
-| **ThreadX (Azure RTOS)** | `tx_thread_create`, `_tx_` prefixes |
+| **FreeRTOS** | `xTaskCreate`, `vTaskStartScheduler`, `vTaskDelay`, `pvPortMalloc`; `configASSERT`; `pxCurrentTCB` when not stripped |
+| **Zephyr** | `k_thread_create` / `k_sem_give` and other `k_*` symbols, `z_` prefixes, the `_kernel` symbol. The device model relies heavily on linker iterable sections and `SYS_INIT`, so **missing direct cross-references is normal**, not a sign of a wrong identification. |
+| **VxWorks** | `taskSpawn`, `semTake`, `msgQSend`, `wdbAgent`; a `WIND version` banner; task names `tIdle` / `tRootTask`. **Often ships an embedded symbol table** — binwalk has a "VxWorks symbol table" signature that scans from the image tail, and the load base can be derived from (string virtual address − file offset). This makes VxWorks the most reliably fingerprintable RTOS of the set. |
+| **ThreadX (Azure RTOS)** | `tx_thread_create`, `tx_kernel_enter`, `tx_queue_*`; the TCB ID constant `TX_THREAD_ID = 0x54485244` ("THRD"); version string `_tx_version_id` |
 | **ESP-IDF (FreeRTOS-based)** | `esp_` prefixes, `IDF` version strings |
 | **bare metal** | No scheduler symbols; a main loop and interrupt vectors |
 
 RTOS identification tells you the calling conventions, the memory model, and where to look
 for task structure — it is worth the five minutes.
+
+**The realistic constraint**: assert strings, log strings, and task names are frequently
+compiled out. String and symbol matching is therefore **confirmatory rather than
+decisive** — absence proves nothing. Where strings are gone, the working approach is
+decompiled-function-shape matching against known library signatures.
+
+### Embedded binary analysis specifics
+
+Two Ghidra details that change the workflow:
+
+- **Ghidra natively supports Xtensa from 11.0** (language `Xtensa:LE:32:default`; version
+  12.x uses language version ~4.1). Some relocations such as `R_XTENSA_SLOT0_OP` remain
+  incomplete. This makes the third-party `ghidra-xtensa` plugins **obsolete on Ghidra
+  ≥ 11.0** — do not install them on a modern Ghidra.
+- **Loading a flash image**: use `saibotk/ghidra-esp32-flash-loader` (or the dynacylabs
+  fork), or convert to ELF first with `tenable/esp32_image_parser`.
+- **SVD files**: Ghidra has no built-in importer. The maintained option is **GhidraSVD
+  v0.6.6 (2026-09)**. Prefer `esp-rs/esp-pacs` as the SVD source — the official
+  `espressif/svd` is out of date. On Ghidra 12, the older Python SVD-Loader must be
+  launched via `support/pyghidraRun`.
 
 ---
 
@@ -196,20 +251,39 @@ Beyond reading memory, the physical interfaces themselves are attack surfaces.
 **The cost gradient is steep.** ChipWhisperer makes power analysis and glitching
 accessible to a well-equipped hobbyist. Laser fault injection is a laboratory capability.
 
+Hardware note: **ChipWhisperer-Pro is discontinued**; the current flagship is
+**HuskyPlus** (Artix-7 A100T, ADS4129 250 MS/s, 327,828-sample buffer, 4-level triggering,
+~$1100), supported by software from **6.0.0 (2025-03-26)**. The Husky (~$630–640) remains
+on sale and covers most teaching and research work.
+
 **The important framing**: side-channel work recovers *keys* and *bypasses checks*, which
 means it is often the only route into a device whose firmware is properly encrypted. It is
 also the technique most likely to permanently damage the device if done carelessly.
 
+### TPM, secure element, and UEFI (2025–2026 findings)
+
+Relevant if the device you are analysing has a boot chain above the SoC:
+
+- **TPM 2.0 Module Library out-of-bounds read — CVE-2025-2884**, which can read sensitive
+  data inside the TPM. AMD published advisories covering Pluton TPM / ASP fTPM.
+- **Infineon OPTIGA TPM SLB 9672/9673** received a certified firmware update in 2026-08
+  covering TCG findings VRT0010 (CVE-2026-6726) and VRT0009 (CVE-2025-2884). VRT0011
+  (CVE-2026-6727) does not affect OPTIGA.
+- **UEFI Secure Boot bypasses are dense**: CVE-2025-4275 (Insyde — missing NVRAM variable
+  attribute validation), CVE-2025-3052 (Binarly — affects most UEFI devices), and ESET's
+  2026-07 disclosure of 11 Microsoft-signed **UEFI shims** (≤ 0.9) that allow Secure Boot
+  bypass.
+
 ### Wireless
 
-| Protocol | Tooling |
-|---|---|
-| **Bluetooth / BLE** | nRF Connect, bettercap, BTLEjack, dedicated sniffer hardware (nRF52840 dongle), Wireshark with the BLE plugin |
-| **Zigbee / Z-Wave** | KillerBee, ApiMote, zigbee2mqtt, Wireshark with the Zigbee dissector |
-| **Wi-Fi** | Monitor mode (`airmon-ng`), `wpa_supplicant`, `hcxdumptool`, Wireshark |
-| **Sub-GHz RF** | Flipper Zero, HackRF, RTL-SDR, `rtl_433`, Universal Radio Hacker (URH) |
-| **NFC / RFID** | Proxmark3, Chameleon Mini, `libnfc` |
-| **SDR (general)** | GNU Radio, `gqrx`, SDR# |
+| Protocol | Tooling | Status / note |
+|---|---|---|
+| **Bluetooth / BLE** | **Nordic nRF Sniffer** (nRF52840 dongle, ~$10) + Wireshark — supports encrypted-link decryption; **NCC Group Sniffle** (CC26x2, e.g. a Sonoff Zigbee 3.0 dongle) for stronger connection following; **bettercap** (v2.41.7, 2026-05) or nRF Connect for scanning/GATT enumeration | **BTLEjack is not archived but is inactive** (last release v2.1.1, 2022-11; last commit 2023-10). It only supports the 1 Mbps uncoded PHY and does not handle channel-map updates. Its follow/jam/hijack on micro:bit is still unique among free tools, but that path is unmaintained. |
+| **Zigbee / Z-Wave** | **zigbee2mqtt** (active, 2.14.x, ~5,800 devices / 600 vendors); **Z-Attack-ng** (PentHertz, 2025, Python + ImGui, **beta S2 support**) | **KillerBee is not archived but development stalled** (last substantive commits 2022; README still warns against deprecated usb0.x and ApiMote v1). **ApiMote remains a 2013–14 v4beta design** with supply problems. Z-Wave Alliance said in late 2026-09 that the source project is complete but **member-only**. |
+| **Wi-Fi** | **hcxdumptool** (active, 7.1.2, 2026-02); aircrack-ng | hcxdumptool ≥ 6.3.0 uses NL80211/RTNETLINK: **kernel ≥ 5.15 and a driver with monitor mode + full frame injection are required**. Recommended chipsets: rtl8xxxu/rtw88, ath9k_htc, rt2800usb. **Intel/Broadcom/Qualcomm built-in cards are explicitly not recommended.** Do not share a NIC with aircrack-ng. aircrack-ng's stable release is still 1.7 (2022-05) though master is active. **Monitor mode is a driver/chip property, never a tool guarantee.** |
+| **Sub-GHz RF** | HackRF, RTL-SDR, `rtl_433`; **URH-NG** (`PentHertz/urh-ng`, beta, v0.0.2 build 20260710) | **The original Universal Radio Hacker repo (`jopohl/urh`) was archived 2026-03-29** (last version 2.10.0). URH-NG is the successor and is still beta. Flipper Zero's official stable release is still 1.4.3 (2025-12) with 1.5.1-rc in pre-release. |
+| **NFC / RFID** | **Proxmark3 Iceman** (`RfidResearchGroup/proxmark3`, v4.23346 "Frosty Lemon", 2026-09-17) | The community standard; the official Proxmark firmware is effectively unmaintained. 2026 releases added iCLASS tear-off/blacktears and a Qt6 client, Ultralight AES, and a unified keygen; emulator memory grew 4096 → 8192 bytes. **Chameleon Ultra** firmware v2.2.0 (2026-07). **Proxmark5 firmware is still beta.** |
+| **SDR (general)** | GNU Radio, `gqrx`, SDR# | — |
 
 **Universal Radio Hacker** is the tool for an unknown RF protocol: it records, demodulates,
 and helps you find the framing. Many consumer devices (remotes, sensors, alarms) use
@@ -281,22 +355,71 @@ time-limited.
   repair
 - **Text and data mining** for scholarly research and teaching
 
-These run until **2027-10-28**. The tenth triennial proceeding opened in 2026 with a
-renewal deadline of 2026-08-24. **Verify current status before relying on any of them.**
+These run until **2027-10-28**. The tenth triennial proceeding opened **2026-06-09** (notice
+of inquiry, 91 FR 34795). Renewal and new-exemption petitions were due **2026-08-24**;
+written comments on renewals were due **2026-09-28**. If renewed, the next term runs
+**2027-10 to 2030-10**. **Verify current status before relying on any of them** — as of
+2026-10 there is no final rule for the tenth proceeding.
+
+Note the scope limits that matter for hardware work:
+
+- The exemption covers **only the act of circumvention under §1201(a)(1)**. It does **not**
+  authorise distributing circumvention tools (§1201(a)(2)/(b)).
+- The regulation **explicitly states it is not a safe harbour or defence** against liability
+  under other law — CFAA in particular.
+- The security-research class is codified at **37 CFR §201.40(b)(18)** (renumbered from
+  (b)(16)). Its conditions are cumulative: lawfully obtained device or authorised system;
+  **sole** purpose of good-faith security research; an environment **designed to avoid any
+  harm to persons or the public**; information used **primarily to promote** the security of
+  that class of device or its users; and **not** used in a way that facilitates copyright
+  infringement.
+- Related classes: (b)(15) devices designed primarily for consumer use, (b)(16) retail-level
+  commercial food preparation equipment (new in 2024), (b)(17) medical devices, plus the
+  vehicle repair and **vehicle operational data** classes.
 
 **Right to repair** intersects here: the vehicle-repair exemption was reaffirmed, and the
 operational-data exemption was added specifically to cover data access beyond repair. Note
 that the exemption explicitly extends to those acting on the owner's behalf — which
 matters for independent researchers and repair shops.
 
-**EU**: the right-to-repair directive and the Cyber Resilience Act create obligations on
-manufacturers, which in practice increases the availability of security-relevant
-information. The DSM Directive's text-and-data-mining provisions (§5 of
-[`compliance-and-scope.md`](compliance-and-scope.md)) cover research corpora.
+**EU** — two instruments with concrete dates:
 
-**IoT security labelling**: the US Cyber Trust Mark program and the EU Cyber Resilience
-Act both push toward mandatory security disclosure. Verify current status — the labelling
-program has moved through phases and the specifics change.
+- **Cyber Resilience Act, Regulation (EU) 2024/2847** — in force since 2024-12-10.
+  **Article 14 reporting obligations apply from 2026-09-11** (the ENISA single reporting
+  platform opened the same day): **24-hour** early warning, **72-hour** formal
+  notification, and a **14-day** final report for actively exploited vulnerabilities (or
+  **1 month** after the 72-hour notice for severe incidents), routed via national CSIRTs
+  and ENISA. Chapter IV applies from 2026-06-11. **Full application is 2027-12-11**
+  (Annex I essential requirements, vulnerability handling, technical documentation,
+  conformity assessment, CE marking, market surveillance). Reporting obligations also cover
+  products placed on the market before 2027-12-11; the Article 24(3) open-source steward
+  duty starts 2027-12-11.
+- **Right-to-repair Directive (EU) 2024/1799** — adopted 2024-06-13, in force 2024-07-30,
+  **member-state transposition deadline was 2026-07-31**. On **2026-09-25** the Commission
+  sent formal notices (first infringement step, INF/26/1834) to **18 member states**:
+  Belgium, Bulgaria, Czechia, Estonia, Spain, France, Croatia, Italy, Cyprus, Latvia,
+  Luxembourg, Malta, Netherlands, Poland, Portugal, Romania, Slovenia, Sweden. Later
+  milestones: the European repair platform's common interface **2027-07-31**, the platform
+  fully operational **2028-01-01**, and notification of at least one national repair
+  promotion measure by **2029-07-31**.
+
+**IoT security labelling — the US Cyber Trust Mark is still being built.** This is worth
+stating precisely because it is often described as operational when it is not:
+
+- It is a **voluntary** FCC labelling program for wireless consumer IoT.
+- **UL Solutions withdrew as Lead Administrator on 2025-12-19.** The FCC accepted
+  applications from 2026-01-07 to 2026-02-09, then **designated ioXt Alliance as Lead
+  Administrator from 2026-04-13**. On **2026-08-11** the FCC reopened the Cybersecurity
+  Label Administrator application window. On **2026-09-28/30** it recognised A2LA and ANAB
+  as certification bodies (Public Notice DA-26-1029).
+- **As of the 2026-08-11 official page update, the FCC had not announced that it is
+  accepting product labelling applications.**
+- **Executive Order 14306 (2025-06-06)** directs the FAR Council to amend the FAR so that
+  agencies require the mark from suppliers of **consumer IoT products** (as defined in
+  47 CFR 8.203(b)) from **2027-01-04**. That definition **excludes FDA-regulated medical
+  devices and NHTSA-regulated vehicles/vehicle equipment** — considerably narrower than
+  "all connected products". **No final FAR rule has been located**, so the date is not a
+  self-executing procurement bar.
 
 **What is not covered**: circumventing protection to access content (piracy), or to
 access another person's device or data. The exemptions are for security research on
@@ -304,31 +427,42 @@ devices you are entitled to research.
 
 ---
 
-## 5. Tool status (verify before depending)
+## 5. Tool status (verified 2026-10)
 
 | Tool | Domain | Status |
 |---|---|---|
-| binwalk | Extraction | **v3 (Rust) is the current line.** v2 fork EOL 2025-12-12. |
-| unblob | Extraction | Active, well-maintained, security-hardened pipeline |
-| FACT | Firmware analysis framework | Active through 2024; Python 3.10–3.12 |
-| EMBA | Firmware analysis + SBOM | Active, Binwalk v3 + unblob integrated |
-| EMBArk | Enterprise firmware scanning | Released 2024 |
-| Firmadyne | Emulation | Dated |
-| FirmAE | Emulation | Active fork |
-| Qiling | Emulation | Active |
-| unicorn | CPU emulation | Active |
-| angr | Symbolic execution | Active |
-| Triton | Dynamic binary analysis | Active |
-| flashrom | Flash reading/writing | Active |
-| OpenOCD | JTAG/SWD | Active |
-| Saleae / sigrok | Logic analysis | Active (sigrok is the open-source stack) |
-| ChipWhisperer | Side-channel / glitching | Active |
-| Proxmark3 | NFC/RFID | Active (Iceman fork is the community standard) |
-| SavvyCAN | CAN RE | Active |
-| `cantools` | CAN/DBC | Active |
-| Universal Radio Hacker | RF protocol RE | Active |
-| Ghidra / radare2 / rizin / Cutter | Binary RE | Active |
-| Capstone | Disassembly framework | Active |
+| **binwalk** | Extraction | **Upstream near-stalled.** Latest tag v3.1.0 (2024-10-31); 3.1.1 written in Cargo.toml but never tagged or published. Issue #935 (2026-02) says unmaintained. The v2 Python fork is EOL (2025-12-12) and archived (2026-01-13). |
+| **binwalk-ng** | Extraction | **Active, v4.0.0 (2026-09-29).** Community fork; CLI still `binwalk`. **Ownership handover is unconfirmed** — no announcement from ReFirmLabs/devttys0. |
+| **unblob** | Extraction | **Active, 26.6.4 (2026-06-04)**; main active through 2026-10. |
+| **sasquatch** | SquashFS | **Use `onekey-sec/sasquatch`** (v4.5.1-6, 2026-01-27). `devttys0/sasquatch` stalled since 2021-03. |
+| **FACT** | Firmware analysis framework | **Active, v4.4.1 (2026-09-14)**. Python 3.10–3.12. **The `FACT_docker` repo is explicitly unmaintained** — use script install or Vagrant. |
+| **EMBA** | Firmware analysis + SBOM | **Active, v2.0.4 (2026-09-21)**; **migrated to binwalk-ng**. |
+| **firmwalker** | Filesystem grep | **Repository gone (404).** Use the `scriptingxss/firmwalker` or `zhibx/firmwalker_pro` mirrors. |
+| **Trommel** | Filesystem grep | **Archived 2024-05-13** (CMU SEI). |
+| **Firmadyne** | Emulation | **Stalled** — no commits after 2024-07. |
+| **FirmAE** | Emulation | Maintained but unreleased since v1.0 (2020); fix commits through 2026-06. |
+| **Qiling** | Emulation | Active, v1.4.11 (2026-09-06) |
+| **unicorn** | CPU emulation | Release lagging (2.1.4, 2025-09); `dev` active |
+| **angr** | Symbolic execution | Very active, 10.0.1 (2026-10) |
+| **Triton** | Dynamic binary analysis | Slow — last release still v0.9 (2022-02); master through 2026-05, `dev-v1.0` untagged |
+| **flashrom** | Flash reading/writing | **Active, v1.8.0 (2026-08-27)**; mainline at v2.0.0-devel |
+| **OpenOCD** | JTAG/SWD | Upstream release stalled (stable 0.12.0, 2023-01); git and vendor forks active |
+| **Saleae Logic 2** | Logic analysis | Active (stable 2.4.46) |
+| **sigrok / PulseView** | Logic analysis | **Effectively dead.** PulseView stable is still 0.4.2 (2020-03); libsigrok 0.5.2 (2019-12). The maintainer publicly described burnout and a "fundamentally outdated" architecture in 2025-10, with no handover. Nightly builds still appear. **Plan a replacement if you depend on it.** |
+| **JTAGulator** | Pin discovery | Firmware stopped at 1.12 (2023-06). Manufacturing and maintenance moved to **EXPLIoT** in 2025-07. |
+| **Bus Pirate 5/6** | Multi-protocol | Shipping; **no numbered stable firmware** — automatic builds from main, flashed as `.uf2`. |
+| **ChipWhisperer** | Side-channel / glitching | Software 6.0.0 (2025-03); HuskyPlus is the flagship. **ChipWhisperer-Pro discontinued.** |
+| **Proxmark3 Iceman** | NFC/RFID | Very active (v4.23346, 2026-09-17) |
+| **BTLEjack** | BLE | Not archived but **inactive** (last commit 2023-10) |
+| **KillerBee** | Zigbee | Not archived but **stalled** (substantive commits end 2022) |
+| **zigbee2mqtt** | Zigbee | Active (2.14.x) |
+| **Universal Radio Hacker** | RF protocol RE | **Original repo archived 2026-03-29.** Successor is **URH-NG** (beta). |
+| **SavvyCAN / can-utils / cantools** | CAN | Active |
+| **Ghidra / radare2 / rizin / Cutter / Binary Ninja / IDA** | Binary RE | Active |
+| **Capstone** | Disassembly framework | Active |
+
+**Also archived or superseded**: `kyechou/firmanal` (archived 2024-08-14),
+`compsecdirect/autodyne` (archived 2025-08-11).
 
 ---
 
@@ -340,6 +474,8 @@ Device to analyse
   1. Software route available?
   |    vendor download / OTA / companion app / cloud API
   |    -> YES: take it. No hardware needed.
+  |    -> Recognise standard update containers: SUIT (RFC 9019 + COSE) or
+  |       MCUboot (magic 0x96f3b83d, TLV 0x6907/0x6908, imgtool)
   |
   2. Physical access required. Identify interfaces:
   |    UART (4-pin header, unpopulated pads) -> serial console
@@ -347,19 +483,23 @@ Device to analyse
   |    JTAG/SWD                               -> OpenOCD; JTAGulator for pin discovery
   |
   3. Readout protected?
-  |    -> identify the scheme (RDP, APPROTECT, eFuse, secure boot)
-  |    -> known bypass exists?  apply it
-  |    -> no: glitching territory. Specialists only.
+  |    -> identify the scheme AND the silicon revision, then check current advisories
+  |    -> ESP32 ECDSA secure boot (H2/C5/C61/P4/S31): AR2026-006, no software fix
+  |    -> STM32 RDP2: documented glitch bypasses; not an absolute barrier
+  |    -> nRF52 APPROTECT: bypassed on early revisions; nRF54L hardened but
+  |       Nordic does not claim its glitch detection is deterministic
+  |    -> no known bypass: glitching territory. Specialists only.
   |
   4. Extract
-  |    -> binwalk v3, then unblob for anything missed
+  |    -> unblob FIRST, binwalk-ng to fill gaps
   |    -> verify extraction completeness, do not assume success
-  |    -> SquashFS with vendor compression? -> sasquatch
+  |    -> SquashFS with vendor compression? -> onekey-sec/sasquatch
   |
   5. Identify
   |    -> architecture + endianness (file, readelf)
   |    -> RTOS (FreeRTOS/Zephyr/VxWorks/ThreadX/bare metal)
   |    -> set the correct load base address in Ghidra
+  |    -> Xtensa: Ghidra >= 11.0 has native support; drop the old plugins
   |
   6. Dynamic
   |    -> full-system emulation (QEMU/FirmAE) -- expect NVRAM/peripheral failures

@@ -15,21 +15,42 @@ language choice is effectively made for you.
 
 | Language | HTTP client with browser TLS | Browser automation | Notes |
 |---|---|---|---|
-| **Python** | **Yes** — `curl_cffi`, `primp`, `rnet`, `tls-client` | Yes — full ecosystem | Richest ecosystem by a wide margin |
+| **Python** | **Yes** — `curl_cffi` | Yes — full ecosystem | Richest ecosystem by a wide margin |
 | **Node.js** | **Yes** — `impit`, `got-scraping` (partial) | Yes — Playwright, Puppeteer | Strong; JS runtime is native |
-| **Go** | **Yes (low-level)** — `utls` + your own HTTP stack; `bogdanfinn/tls-client` | Yes — `go-rod`, `chromedp` | `utls` controls the ClientHello only; you assemble the rest |
-| **Rust** | **Yes** — `wreq`, `rquest`, `boring` | Yes — `chromiumoxide`, `fantoccini` | `wreq` is the most complete Rust option |
-| **Java / Kotlin** | **Limited** — no mature ClientHello-shaping client | Yes — Playwright Java, Selenium, HtmlUnit | Typically needs a browser or an external helper for TLS-sensitive targets |
-| **C# / .NET** | **Limited** — no mature option | Yes — Playwright .NET, PuppeteerSharp | Same constraint as JVM |
-| **C / C++** | **Yes** — `curl-impersonate` (the reference implementation) | Via CEF, or shell out | You are writing infrastructure, not scripts |
-| **Ruby** | **Limited** | Yes — Capybara, Ferrum (CDP) | Ferrum is CDP-direct and reasonable |
-| **PHP** | **Limited** | Via headless Chrome wrappers | Rarely the right choice for this work |
-| **Swift** | macOS/iOS native | WebKit automation | Useful for Apple-platform-specific work |
-| **Elixir / Erlang** | Limited | Via external process | Concurrency strengths, small RE ecosystem |
-| **Lua** | No | No | Relevant for WAF rule authoring (OpenResty) and game scripting, not clients |
+| **Go** | **Yes (low-level)** — `utls` + your own HTTP stack; `bogdanfinn/tls-client` | Yes — `chromedp`, `playwright-go` | `utls` controls the ClientHello only; you assemble the rest |
+| **Rust** | **Yes** — `wreq` | Yes — `chromiumoxide`, `fantoccini` | `wreq` is the only mature Rust option — see the note below |
+| **C / C++** | **Yes** — `lexiforest/curl-impersonate` | Via CEF, or shell out | You are writing infrastructure, not scripts |
+| **Java / Kotlin** | **Community-grade** — `zhkl0228:impersonator` | Yes — Playwright Java, Selenium, HtmlUnit | Does JA3/JA4 + HTTP/2 + HTTP/3 emulation; production reliability unverified |
+| **C# / .NET** | **Immature** — `Loxifi.CurlImpersonate`, `CurlImpersonate` | Yes — Playwright .NET, PuppeteerSharp | Small projects; treat as experimental |
+| **PHP** | **Immature** — small projects only | Via headless Chrome wrappers | Not a serious option for TLS-sensitive targets |
+| **Ruby** | **Immature** — `ruby-curl-impersonate` (0 stars, no release) | Yes — Capybara, Ferrum (CDP) | Ferrum is CDP-direct and reasonable for the non-TLS case |
+| **Swift** | **No option exists** | WebKit automation, WebDriverAgent, idb | Search for Swift TLS-impersonation work returns nothing; there is also no maintained Swift SM2/SM3/SM4 library |
+| **Elixir / Erlang** | **No** — use a sidecar | Via external process | Concurrency strengths, small RE ecosystem |
+| **Lua** | **No** — use a sidecar | No | Relevant for WAF rule authoring (OpenResty) and game scripting, not clients |
 
-The practical summary: **if the target fingerprints TLS, your realistic choices are
-Python, Node, Go, Rust, or C.** Everything else means running a browser or a sidecar.
+The practical summary: **if the target fingerprints TLS, the mature choices are Python,
+Node, Go, Rust, or C.** JVM has a community-grade option. Everything else means running a
+browser or a sidecar.
+
+### Four corrections that trip people up
+
+1. **`rquest` is dead.** Every version on crates.io is **yanked** (last: 5.2.0,
+   2025-07-11). Do not start new Rust work on it — use `wreq`.
+2. **There is no `rustls-tls` crate.** crates.io search hits are dependency names, not a
+   package. Rust fingerprint emulation lives in `wreq` (a hard fork of `reqwest`) and
+   `impit` (a patched rustls + h2 requiring `[patch.crates-io]` and
+   `--cfg reqwest_unstable`).
+3. **`curl-impersonate` moved.** The original `lwthiker/curl-impersonate` stopped at
+   v0.6.1 (2024-03-02). Active maintenance is at **`lexiforest/curl-impersonate`**
+   (v2.2.3, 2026-09), which is merged into curl 8.22.0 and ships HTTP/3 plus prebuilt
+   Android/iOS/Windows/LoongArch/RISC-V binaries.
+4. **JVM is not "no option".** `com.github.zhkl0228:impersonator` (1.10.2, Maven Central
+   2026-09) performs JA3/JA4 + HTTP/2 + HTTP/3 emulation. It is a small project (double-
+   digit GitHub stars), so the honest classification is *community-grade, production
+   reliability unverified* — not *impossible*.
+5. **HtmlUnit has a groupId trap.** `org.htmlunit:htmlunit` is the current line (5.5.0,
+   2026-08); the legacy `net.sourceforge.htmlunit:htmlunit` is frozen at 2.70.0
+   (2023-01). Both still resolve, so you can silently pull the ancient one.
 
 ---
 
@@ -39,15 +60,15 @@ The default choice for RE work, and the one with the most complete tooling.
 
 ### HTTP clients
 
-| Package | Registry | What it does | Notes |
+| Package | Registry | What it does | Status / notes |
 |---|---|---|---|
 | **curl_cffi** | PyPI | Browser-like TLS/JA3/JA4/HTTP2 impersonation | The baseline. See [`http-clients.md`](http-clients.md) for the UA/OS trap. |
-| **hrequests** | PyPI | High-level requests-like API with browser transport | Convenient, smaller ecosystem |
-| **rnet** | PyPI (`--pre`) | Fine-grained TLS/HTTP2 fingerprint control | Younger, performance-focused |
-| **primp** | PyPI | Rust-backed HTTP client with browser impersonation | Fast, from the same lineage as `rquest` |
-| **tls-client** | PyPI | Go binding to `bogdanfinn/tls-client` | Another impersonation route |
-| **httpx** | PyPI | Modern async HTTP client | Easy to detect on protected targets; fine otherwise |
-| **requests** | PyPI | The classic | Same caveat |
+| **primp** | PyPI | Rust-backed HTTP client with browser impersonation | Fast, from the same lineage as the Rust `rquest` |
+| **rnet** | PyPI (`--pre`) | Fine-grained TLS/HTTP2 fingerprint control | **Treat with caution** — the GitHub repo API returns 404 and there has been no release in over a year |
+| **python-tls-client** | PyPI | Go binding to `bogdanfinn/tls-client` | **Use this, not `tls-client`** — the `tls-client` PyPI package stopped at 1.0.1 (2024-02) |
+| **hrequests** | PyPI | High-level requests-like API with browser transport | **Discontinued** — last release 0.9.2 (2024-12) |
+| **httpx** | PyPI | Modern async HTTP client | 0.28.1 has been current since 2024-12; stable and fine, just note the slow release cadence |
+| **requests** | PyPI | The classic | Easy to detect on protected targets |
 
 ### Browser automation
 
@@ -84,11 +105,18 @@ burden. Pick by success rate and maintenance activity, not by knob count.
 | **cryptography** | Modern, well-maintained; OpenSSL-backed |
 | **gmssl-python** | ctypes binding to the GmSSL C library. SM2/SM3/SM4/SM9/ZUC. **Requires GmSSL installed first** — it calls `libgmssl.so` via ctypes, it is not pure Python. |
 | **gmssl** (pure Python) | The older pure-Python SM implementation. Different package, often confused with the above. |
-| **pysmx** | Pure-Python SM2/SM3/SM4/SM9 |
+| **snowland-smx** | Pure-Python SM2/SM3/SM4/SM9 |
 
-**The naming trap**: `gmssl` and `gmssl-python` are different packages with the same
-import name (`gmssl`). The ctypes one needs the native library; the pure-Python one does
-not. Check which you have before debugging a load error.
+**Two naming traps here, and both are common:**
+
+1. `gmssl` and `gmssl-python` are different packages with the same import name (`gmssl`).
+   The ctypes one needs the native library; the pure-Python one does not. Check which you
+   have before debugging a load error.
+2. **`pip install pysmx` does not install a 国密 library.** The PyPI package `pysmx` is a
+   **SourceMod plugin tool** ("Interact with SourceMod plug-ins"). The library people mean
+   when they say "pysmx" is published as **`snowland-smx`** — its *import* name happens to
+   be `pysmx` (`from pysmx.SM2 import ...`), which is where the confusion comes from. Any
+   document telling you to `pip install pysmx` for SM2/SM3/SM4 is wrong.
 
 ### Others
 
@@ -142,16 +170,22 @@ the stack.
 | Package | Registry | What it does |
 |---|---|---|
 | **utls** (`refraction-networking/utls`) | pkg.go.dev | Fork of `crypto/tls` providing ClientHello control. **Handshake is still performed by `crypto/tls`** — this library only changes the ClientHello. BSD-3-Clause. Active (roughly quarterly tagged releases). |
-| **bogdanfinn/tls-client** | GitHub / pkg.go.dev | Full HTTP client with impersonation profiles. What the Python `tls-client` binding wraps. |
+| **bogdanfinn/tls-client** | GitHub / pkg.go.dev | Full HTTP client with impersonation profiles. What the Python binding wraps. |
 | **req** (`imroc/req`) | pkg.go.dev | Ergonomic HTTP client with middleware |
 | **fasthttp** | pkg.go.dev | High-performance HTTP; not net/http compatible |
-| **go-rod** | pkg.go.dev | CDP browser automation |
-| **chromedp** | pkg.go.dev | CDP browser automation (lower level than rod) |
+| **chromedp** | pkg.go.dev | CDP browser automation — **prefer this**; see the `go-rod` note below |
+| **playwright-go** | pkg.go.dev | Playwright bindings for Go |
+| **go-rod** | pkg.go.dev | CDP browser automation — **no release in over two years**; use `chromedp` or `playwright-go` for new work |
 | **colly** | pkg.go.dev | Crawling framework |
 | **goquery** | pkg.go.dev | jQuery-like HTML parsing |
 | **gorilla/websocket** | pkg.go.dev | WebSocket |
-| **tjfoc/gmsm** | pkg.go.dev | SM2/SM3/SM4 |
+| **emmansun/gmsm** | pkg.go.dev | SM2/SM3/SM4 — **use this**; `tjfoc/gmsm` last released in 2021 |
 | **google.golang.org/protobuf** | pkg.go.dev | protobuf |
+
+**WASM runtime bindings in Go**: both `wasmerio/wasmer-go` and
+`bytecodealliance/wasmtime-go` have been without a release since 2021–2022. For current Go
+work, **Wazero** (pure Go, no CGo) is the maintained path — it is what the `QJS` JavaScript
+runtime uses.
 
 **`utls` details worth knowing**:
 
@@ -178,20 +212,26 @@ disassembly. See [`software-reverse-engineering.md`](software-reverse-engineerin
 
 Rust has become a genuine option for this work, primarily because of `wreq`.
 
-| Crate | Registry | What it does |
-|---|---|---|
-| **wreq** | crates.io | **Hard fork of `reqwest`** adding precise TLS + HTTP/2 fingerprint control. Fine-grained control over TLS extensions and HTTP/2 settings rather than string-based fingerprint matching. Maintained by the author of `reqwest-impersonate` (`0x676e67`). Companion `wreq-util` crate holds browser emulation templates. |
-| **rquest** | crates.io | Earlier impersonating client from the same lineage |
-| **reqwest** | crates.io | The standard Rust HTTP client |
-| **chromiumoxide** | crates.io | Async CDP browser automation |
-| **fantoccini** | crates.io | WebDriver client |
-| **thirtyfour** | crates.io | Alternative WebDriver client |
-| **scraper** | crates.io | HTML parsing (html5ever) |
-| **select** | crates.io | CSS selector extraction on scraper |
-| **rustls** | crates.io | Modern TLS implementation |
-| **boring** | crates.io | BoringSSL bindings — low-level TLS control |
-| **rquickjs** | crates.io | High-level QuickJS bindings; ES2020+, async bridging to Rust |
-| **tokio-tungstenite** | crates.io | WebSocket |
+| Crate | Registry | What it does | Status |
+|---|---|---|---|
+| **wreq** | crates.io | **Hard fork of `reqwest`** adding precise TLS + HTTP/2 fingerprint control. Fine-grained control over TLS extensions and HTTP/2 settings rather than string-based fingerprint matching. Companion `wreq-util` crate holds browser emulation templates. | **Active — the only mature option.** Maintained by the author of `reqwest-impersonate` (`0x676e67`). |
+| **rquest** | crates.io | Earlier impersonating client from the same lineage | **Dead — every version is yanked** (last 5.2.0, 2025-07-11). Do not use. |
+| **impit** | crates.io | Patched rustls + h2 for browser emulation | Active, but requires `[patch.crates-io]` and `--cfg reqwest_unstable` |
+| **reqwest** | crates.io | The standard Rust HTTP client | Active |
+| **chromiumoxide** | crates.io | Async CDP browser automation | Active |
+| **fantoccini** | crates.io | WebDriver client | Active |
+| **thirtyfour** | crates.io | Alternative WebDriver client | Active |
+| **scraper** | crates.io | HTML parsing (html5ever) | Active |
+| **select** | crates.io | CSS selector extraction on scraper | Active |
+| **rustls** | crates.io | Modern TLS implementation | Active |
+| **boring** | crates.io | BoringSSL bindings — low-level TLS control | Active |
+| **rquickjs** | crates.io | High-level QuickJS bindings; ES2020+, async bridging to Rust | Active |
+| **tokio-tungstenite** | crates.io | WebSocket | Active |
+| **sm2 / sm3 / sm4** | crates.io | 国密 algorithms (RustCrypto) | Active |
+
+**There is no `rustls-tls` crate.** A crates.io search returns dependency names, not a
+package. If you see it referenced as a Rust fingerprinting library, that is a
+misreading — the actual mechanisms are `wreq` (fork) and `impit` (patched rustls + h2).
 
 **Why `wreq` matters**: it explains its own design decision, and the reasoning is
 correct — browser fingerprints like JA3, JA4, and Akamai cannot be reliably emulated with
@@ -211,31 +251,36 @@ fingerprintable from panic formats.
 
 ## 6. Java / Kotlin
 
-The JVM is a strong platform for *analysing* Java, and a weak one for *impersonating a
-browser*.
+The JVM is a strong platform for *analysing* Java, and a **community-grade** one for
+*impersonating a browser*.
 
-**The constraint**: there is no mature JVM library that reproduces a browser's
-ClientHello. `OkHttp` and `Apache HttpClient` send Java TLS fingerprints. If your target
-fingerprints TLS, your options are a real browser, an external sidecar (call a Go/Rust
-binary or a Python service), or a custom `SSLEngine` implementation — which is a
-significant project.
+**The constraint, stated accurately**: `OkHttp` and `Apache HttpClient` send Java TLS
+fingerprints. There **is** a third-party option for ClientHello shaping —
+`com.github.zhkl0228:impersonator` (1.10.2, Maven Central 2026-09), which does JA3/JA4 plus
+HTTP/2 and HTTP/3 emulation. It is a small project (double-digit GitHub stars), so treat
+it as **community-grade with unverified production reliability**, not as equivalent to
+`curl_cffi`. If you need production reliability, plan for a real browser or a sidecar
+(call a Go/Rust binary or a Python service); building a custom `SSLEngine` is a
+significant project of its own.
 
 | Library | Registry | Use |
 |---|---|---|
 | **Jsoup** | Maven | HTML parsing (the standard) |
-| **HtmlUnit** | Maven | Headless browser in pure Java; useful, but its fingerprint is distinctive |
+| **HtmlUnit** | Maven | Headless browser in pure Java; useful, but its fingerprint is distinctive. **GroupId trap**: `org.htmlunit:htmlunit` is the current line (5.5.0, 2026-08); the legacy `net.sourceforge.htmlunit:htmlunit` is frozen at 2.70.0 (2023-01). Both still resolve. |
+| **impersonator** | Maven (`com.github.zhkl0228`) | JA3/JA4 + HTTP/2 + HTTP/3 impersonation. Community-grade. |
 | **Selenium** | Maven | Browser automation |
 | **Playwright (Java)** | Maven | Browser automation with the Playwright API |
 | **OkHttp** | Maven | HTTP client |
 | **Apache HttpClient** | Maven | HTTP client |
-| **BouncyCastle (bcprov, bcpkix)** | Maven | Crypto, including SM2/SM3/SM4 |
+| **BouncyCastle (bcprov, bcpkix)** | Maven | Crypto. **1.86 confirmed to include `SM2Engine`, `SM3Digest`, `SM4Engine`, `SM9Engine`, `SM2Signer`**, plus JCA registration for SM3/SM4 — a genuinely complete 国密 implementation. |
 | **Netty** | Maven | Async networking; if you must build a custom TLS stack, this is the base |
 | **CFR / Vineflower / Procyon** | JAR | Java decompilers — see [`software-reverse-engineering.md`](software-reverse-engineering.md) |
 | **Recaf** | JAR | Interactive bytecode editor |
 | **jadx** | JAR | Android/DEX decompiler |
 
 For JVM-based *analysis* work (decompiling JARs, understanding Android apps), Java is
-excellent. For JVM-based *client* work against a defended target, plan for a sidecar.
+excellent. For JVM-based *client* work against a TLS-fingerprinting target, budget for
+either the community library or a sidecar.
 
 ---
 
@@ -250,7 +295,8 @@ Same constraint as the JVM: no mature ClientHello-shaping client.
 | **Playwright (.NET)** | NuGet | Browser automation |
 | **PuppeteerSharp** | NuGet | CDP automation |
 | **HttpClient** | Built-in | HTTP |
-| **BouncyCastle.Cryptography** | NuGet | Crypto |
+| **BouncyCastle.Cryptography** | NuGet | Crypto. **bc-csharp 2.7.0 confirmed to include `SM2Engine`, `SM3Digest`, `SM4Engine`, `SM9Engine`, `SM2Signer`** — the 国密 story on .NET is complete. |
+| **Loxifi.CurlImpersonate** / **CurlImpersonate** | NuGet | TLS impersonation wrappers — **small, experimental projects**. Treat as proof-of-concept, not infrastructure. |
 | **dnSpyEx** | GitHub | .NET decompiler/debugger/editor — the primary .NET RE tool |
 | **ILSpy** | GitHub | .NET decompiler |
 | **de4dot / de4dot-cex** | GitHub | Obfuscator removal |
@@ -261,6 +307,10 @@ target and the *worst* choice for protecting your own logic. If you are on the d
 side, that is the relevant fact. And remember **NativeAOT** breaks the traditional
 toolchain entirely — see [`software-reverse-engineering.md`](software-reverse-engineering.md).
 
+**TLS impersonation on .NET is genuinely immature.** Unlike the JVM, there is not even a
+community-grade single library to point at — only small wrappers around curl-impersonate.
+If your target fingerprints TLS, budget for a sidecar.
+
 ---
 
 ## 8. C / C++
@@ -269,7 +319,7 @@ You write infrastructure here, not scripts. The payoff is total control.
 
 | Library | Use |
 |---|---|
-| **curl-impersonate** | **The reference implementation.** A curl build that reproduces browser TLS/HTTP2 fingerprints. Most higher-level impersonation libraries are ported from or inspired by its profile data. |
+| **curl-impersonate** | **The reference implementation.** A curl build that reproduces browser TLS/HTTP2 fingerprints. Most higher-level impersonation libraries are ported from or inspired by its profile data. **Use `lexiforest/curl-impersonate`** — the original `lwthiker` repo stopped at v0.6.1 (2024-03-02). The maintained fork is v2.2.3 (2026-09), merged into curl 8.22.0, and ships HTTP/3 plus prebuilt Android/iOS/Windows/LoongArch/RISC-V binaries. |
 | **libcurl** | The base HTTP library |
 | **OpenSSL / BoringSSL** | TLS; BoringSSL is what Chrome uses, so its fingerprints are authentic |
 | **mbedTLS** | Embedded-friendly TLS |
@@ -285,7 +335,8 @@ safety, and ecosystem.
 
 **curl-impersonate is the origin of the profile data** that `curl_cffi`, `primp`, and
 others consume. When a Python library's impersonation breaks on a new browser version,
-the fix usually originates upstream in the profile definitions.
+the fix usually originates upstream in the profile definitions — which is why knowing
+*which fork* is maintained matters.
 
 ---
 
@@ -343,21 +394,30 @@ Pin WABT ≤1.0.41 if you depend on it. See [`wasm-reverse-engineering.md`](wasm
 Covered briefly because they come up but are rarely the right answer.
 
 **Ruby**: `Ferrum` (CDP-direct, reasonable), `Capybara` + a driver, `Nokogiri` (HTML),
-`Mechanize`. No TLS impersonation client. Use it if your team lives in Ruby and your
-target does not fingerprint TLS.
+`Mechanize`. TLS impersonation is effectively absent — `ruby-curl-impersonate` has zero
+stars and no release. Use it if your team lives in Ruby and your target does not
+fingerprint TLS.
 
-**PHP**: `Guzzle` for HTTP, various headless-Chrome wrappers. No TLS impersonation. PHP is
-a poor fit for this work.
+**PHP**: `Guzzle` for HTTP, various headless-Chrome wrappers. TLS impersonation is limited
+to small projects. The 国密 story is better than the impersonation story: **`pohoc/crypto-sm`**
+(pure PHP) and **`appla/php-ext-gmsm`** (a PHP 8.3+ C extension built on OpenSSL) both
+exist and are maintained.
 
-**Swift**: relevant for macOS/iOS-specific automation (WebKit, `XCUITest`). Not a general
-choice.
+**Swift**: **there is a hard gap here.** A search for Swift TLS-fingerprint impersonation
+work returns nothing, and there is **no maintained Swift 国密 library** (SM2/SM3/SM4
+appears only as 2018-era personal demos). Swift is usable for Apple-platform automation
+(WebDriverAgent, `idb`) and for WASM (`swiftwasm/WasmKit`) — not as a client language for a
+TLS-fingerprinting target.
 
 **Elixir / Erlang**: excellent concurrency, small RE ecosystem. Shell out to a Python or
 Go sidecar for the actual work.
 
 **Lua**: not a client language. Relevant for **OpenResty/nginx WAF rule authoring** (the
 defensive side — see [`waf-bypass-techniques.md`](waf-bypass-techniques.md)) and for game
-scripting.
+scripting. Note that LuaRocks has no stable JSON API, so version checks go through
+`luarocks.org/manifests/<author>/manifest` or GitHub tags. One practical gotcha if you use
+`lua-resty-http`: **from v0.18.0, `POST`/`PUT`/`PATCH` with no body require an explicit
+`body = ""`.**
 
 ---
 
@@ -369,15 +429,26 @@ Does the target fingerprint TLS or HTTP/2?
   +-- YES, and I need to pass it
   |     -> Python (curl_cffi/primp)  -- fastest path, best tooling
   |     -> Node (impit)              -- if you need JS natively
-  |     -> Go (utls/tls-client)      -- if you need a static binary or concurrency
+  |     -> Go (utls / tls-client)    -- if you need a static binary or concurrency
   |     -> Rust (wreq)               -- if you need fine-grained control
-  |     -> C (curl-impersonate)      -- if you need to build the infrastructure
-  |     -> JVM/.NET/Ruby/PHP         -- run a browser, or call a sidecar
+  |     -> C (lexiforest/curl-impersonate) -- if you need to build the infrastructure
+  |     -> JVM (impersonator)        -- community-grade; verify before production
+  |     -> .NET / PHP / Ruby / Swift -- run a browser, or call a sidecar
   |
   +-- NO
         -> Any language with a decent HTTP client and parser.
            Pick by team familiarity, not by this document.
 ```
+
+**Maturity summary**, so you can set expectations honestly:
+
+| Tier | Languages |
+|---|---|
+| **Mature** | Python (`curl_cffi`), Node (`impit`), Go (`bogdanfinn/tls-client` + `utls`), Rust (`wreq`), C (`lexiforest/curl-impersonate`) |
+| **Community-grade** | JVM (`zhkl0228:impersonator`) |
+| **Immature / experimental** | .NET, PHP, Ruby |
+| **Blank** | Swift |
+| **None — sidecar required** | Elixir/Erlang, Lua |
 
 Two secondary questions that often decide it:
 
@@ -404,24 +475,33 @@ Two secondary questions that often decide it:
 
 ## 中文摘要
 
-**先说结论**：这个技能文档以 Python 为主，是因为生态确实在 Python，不是因为你必须用 Python。但有一个约束会替你决定语言：**如果目标对 TLS 做指纹识别，现实选择只有 Python / Node / Go / Rust / C**，其他语言只能跑浏览器或挂一个 sidecar。
+**先说结论**：这个技能文档以 Python 为主，是因为生态确实在 Python，不是因为你必须用 Python。但有一个约束会替你决定语言：**如果目标对 TLS 做指纹识别，成熟选择只有 Python / Node / Go / Rust / C**；JVM 有社区级方案；其他语言只能跑浏览器或挂 sidecar。
 
-**能力矩阵**：
-- **Python**：`curl_cffi` / `primp` / `rnet` / `tls-client`，工具链最全。
-- **Node.js**：`impit`（Rust 后端）、`got-scraping`；优势是本身就有 JS 引擎，跑厂商 JS 无需桥接。
-- **Go**：`utls`（**只控制 ClientHello，握手仍由 `crypto/tls` 完成**，BSD-3-Clause，约每季度发版）+ `bogdanfinn/tls-client`；`utls` 的 `Fingerprinter.FingerprintClientHello()` 可以把抓到的 ClientHello 字节转成可复用的 `ClientHelloSpec`，README 明确建议**用多个指纹而非单一指纹**。`go version -m ./binary` 能直接读出依赖模块版本，常常足以定位已知 CVE。
-- **Rust**：**`wreq`**（`reqwest` 的硬分支，对 TLS 扩展与 HTTP/2 设置做细粒度控制）。它的设计理由值得记住：**JA3/JA4/Akamai 这类指纹无法用字符串可靠模拟**，所以不做字符串解析重放，而是直接控制参数"构造"出指纹。且**多数浏览器设备型号的 TLS 与 HTTP/2 配置完全相同，只有 UA 不同**。
-- **Java / C# / Ruby / PHP**：**没有成熟的 ClientHello 塑形客户端**。OkHttp / Apache HttpClient / HttpClient 发出的都是各自运行时的 TLS 指纹。要么用真浏览器，要么调外部 sidecar。
+**成熟度分层（按实际 registry 状态核对）**：
+- **成熟**：Python（`curl_cffi`）/ Node（`impit`）/ Go（`bogdanfinn/tls-client` + `utls`）/ Rust（`wreq`）/ C（`lexiforest/curl-impersonate`）
+- **社区级**：JVM（`com.github.zhkl0228:impersonator` 1.10.2，做 JA3/JA4 + HTTP/2 + HTTP/3，但项目很小，生产可靠性**未核实**）
+- **极不成熟**：.NET（只有 curl-impersonate 的小型包装）/ PHP / Ruby（`ruby-curl-impersonate` 零 star 无 release）
+- **完全空白**：**Swift**——搜 Swift TLS 指纹仿真返回 0 结果，且**无维护中的 Swift 国密库**（SM2/SM3/SM4 只有 2018 年个人 Demo）
+- **必须 sidecar**：Elixir/Erlang、Lua
+
+**五条必须纠正的常见错误**：
+1. **`rquest` 已死**——crates.io 上**所有版本均已 yank**（最后 5.2.0 / 2025-07-11）。Rust 侧请用 `wreq`。
+2. **`rustls-tls` crate 不存在**——crates.io 搜到的只是依赖名，不是包。
+3. **`curl-impersonate` 已迁移**——原仓库 `lwthiker` 停在 v0.6.1（2024-03-02），实际维护在 **`lexiforest/curl-impersonate`**（v2.2.3 / 2026-09，已并入 curl 8.22.0，含 HTTP/3 与 Android/iOS/Windows/LoongArch/RISC-V 预编译）。
+4. **`pip install pysmx` 装不到国密库**——PyPI 上的 `pysmx` 是 **SourceMod 插件工具**。真正要装的是 **`snowland-smx`**（1.1.0），只是它的 **import 名恰好是 `pysmx`**，混淆由此而来。
+5. **HtmlUnit 的 groupId 陷阱**——`org.htmlunit:htmlunit` 是现行线（5.5.0 / 2026-08），`net.sourceforge.htmlunit:htmlunit` 冻结在 2.70.0（2023-01），两者都能解析，可能静默拉到旧版。
+
+**Python 侧的停更清单（带日期）**：`undetected-chromedriver` 3.5.5（2024-02-17，被 nodriver 取代）、`hrequests` 0.9.2（2024-12-01）、PyPI `tls-client` 1.0.1（2024-02-02，替代是 `python-tls-client`）、`rnet`（GitHub 仓库 API 返回 404 且 14 个月无发版）。`go-rod` 已 27 个月无 release，Go 侧改用 `chromedp` / `playwright-go`。Go 的 WASM 绑定 `wasmer-go`（2021）与 `wasmtime-go`（2022）均已停滞，改用 **Wazero**。国密 Go 库用 **`emmansun/gmsm`**，不用 2021 年停更的 `tjfoc/gmsm`。
+
+**国密覆盖（源码级已确认）**：BouncyCastle Java 1.86 与 bc-csharp 2.7.0 均含 `SM2Engine`/`SM3Digest`/`SM4Engine`/`SM9Engine`/`SM2Signer`（bc-java 另有 JCA 注册）；Go 用 `emmansun/gmsm`；Rust 用 RustCrypto 的 `sm2`/`sm3`/`sm4`；PHP 有 `pohoc/crypto-sm`（纯 PHP）与 `appla/php-ext-gmsm`（PHP 8.3+ C 扩展）。
 
 **浏览器自动化的当前状态（重要）**：
-- **`undetected-chromedriver` 已死**（PyPI 最后版本 3.5.5，2024-02-17），后继者是同作者的 **nodriver**（直连 CDP WebSocket，无 Playwright 垫片、无 `Runtime.enable` 序列）。
-- **`rebrowser-playwright` 实质停止维护**：最后一次真实代码提交是 **2024 年 9 月**（2025-05 的 `pushed_at` 只是元数据触碰），捆绑 Chromium 136，仓库无 LICENSE。不要在新项目上用。
-- **Patchright** 活跃（修补 CDP 泄漏类，捆绑版本较新）；**Camoufox** 在 **C++ 引擎层**做指纹伪装而非 JS 覆盖（最慢、对硬指纹目标最强）；**SeleniumBase UC mode** 适合过 Cloudflare/CAPTCHA 插页；**DrissionPage** 纯 Python、直连 CDP、无 Node 无驱动二进制，其隐蔽性来自"不加明显的自动化标记"，**并不伪造 TLS/canvas/WebGL**。
-- **诚实结论：所有开源隐蔽浏览器最终都会泄漏，每次浏览器发版都需要重新打补丁。**选型就是选维护负担，按成功率与维护活跃度选，不要按功能数量选。
+- **`undetected-chromedriver` 已死**（2024-02-17），后继者是同作者的 **nodriver**（直连 CDP WebSocket，无 Playwright 垫片、无 `Runtime.enable` 序列）。
+- **`rebrowser-playwright` 实质停止维护**（最后 release 1.52.0 / 2025-05-09，最后真实代码提交 2024-09），不要在新项目上用。`rebrowser-puppeteer` 的维护情况好于 Playwright 变体。
+- **Patchright** 活跃；**Camoufox** 在 **C++ 引擎层**做指纹伪装而非 JS 覆盖（最慢、对硬指纹目标最强）；**SeleniumBase UC mode** 适合过 Cloudflare/CAPTCHA 插页；**DrissionPage** 纯 Python、直连 CDP，其隐蔽性来自"不加明显的自动化标记"，**并不伪造 TLS/canvas/WebGL**。
+- **诚实结论：所有开源隐蔽浏览器最终都会泄漏，每次浏览器发版都需要重新打补丁。**选型就是选维护负担。
 
-**国密库命名陷阱**：`gmssl`（纯 Python）与 `gmssl-python`（ctypes 绑定 GmSSL C 库）是**两个不同包，但导入名都叫 `gmssl`**。ctypes 版本必须先装原生 GmSSL 库，否则加载失败。另有 `pysmx`（纯 Python SM2/SM3/SM4/SM9）。
-
-**可嵌入 JS 引擎**（当你的语言不是 JS 而目标逻辑是 JS 时）：QuickJS（C，ES2023，常用选择）、QuickJS-NG（活跃分支，`rquickjs` 与 `wasm-rquickjs` 的基础）、**goja**（纯 Go，无 CGo，体积 13.2MB，比 QuickJS 慢）、QJS（QuickJS 编译为 WASM 跑在 Wazero 上，CGo-free 且默认隔离文件系统与网络，可设内存/时间上限）、`rquickjs`（Rust）、Boa（纯 Rust，接近完整 ES2025）、Duktape/mujs（小但老旧）、Jint（.NET）、Hermes（React Native，字节码本身是逆向目标，`hbctool` 仅支持 HBC 59/62/74/76）。
+**可嵌入 JS 引擎**：QuickJS（C，ES2023，常用选择）、QuickJS-NG（活跃分支，`rquickjs` 与 `wasm-rquickjs` 的基础）、**goja**（纯 Go，无 CGo，比 QuickJS 慢）、QJS（QuickJS 编译为 WASM 跑在 Wazero 上，CGo-free 且默认隔离文件系统与网络）、`rquickjs`（Rust）、Boa（纯 Rust，接近完整 ES2025）、Duktape/mujs（小但老旧）、Jint（.NET）、Hermes（React Native，字节码本身是逆向目标）。
 
 **补环境选型**：QuickJS 通常是正确选择——小、ES2023 完整、易嵌入、全局对象易于塑形。V8 更重但目标实际跑的就是它，行为差异更小。
 
@@ -429,4 +509,4 @@ Two secondary questions that often decide it:
 
 **WASM 运行时**：wasmtime、wasmer、wasm3、Wazero（纯 Go）、**wasm2c（转成 C 再用真实 C 编译器编译，常常比专用运行时更快且产出可读 C）**。**WABT 注意：`wasm-decompile` 已于 2026-06-22 从 WABT 移除**（PR #2769，1.0.42），依赖它的项目需 pin ≤1.0.41。
 
-**选型决策**：目标是否对 TLS 指纹识别？是 → Python（最快路径）/ Node（需要原生 JS）/ Go（需要静态二进制或高并发）/ Rust（需要细粒度控制）/ C（要自己造基础设施）；否 → 任何有像样 HTTP 客户端与解析器的语言，按团队熟悉度选。两个常见的决定性次问：**是否需要执行目标的 JS**（是则 JS 原生或嵌入引擎优势巨大）与**这是一次性还是生产系统**（生产的指纹客户端维护成本是真实的且对版本敏感，务必 pin 依赖）。
+**选型决策**：目标是否对 TLS 指纹识别？是 → Python（最快路径）/ Node（需要原生 JS）/ Go（需要静态二进制或高并发）/ Rust（需要细粒度控制）/ C（要自己造基础设施）；JVM 可试社区库但需自行验证；.NET/PHP/Ruby/Swift 走 sidecar。否 → 任何有像样 HTTP 客户端与解析器的语言，按团队熟悉度选。两个常见的决定性次问：**是否需要执行目标的 JS**（是则 JS 原生或嵌入引擎优势巨大）与**这是一次性还是生产系统**（生产的指纹客户端维护成本是真实的且对版本敏感，务必 pin 依赖）。
