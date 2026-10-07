@@ -2,9 +2,38 @@
 """
 Camoufox template for high-protection sites.
 Anti-detection Firefox automation with human-like behavior.
+
+Requires (only to actually scrape):
+    pip install -U camoufox[geoip]
+    python -m camoufox fetch          # download the patched browser bundle
+
+--help and --check-deps work without camoufox installed; the import inside the scrape
+functions is deliberately lazy so the interface stays discoverable before setup.
 """
+import argparse
 import random
+import sys
 import time
+
+__version__ = "1.0.0"
+
+
+def check_deps(verbose: bool = True) -> bool:
+    """Report whether camoufox is importable, without launching a browser."""
+    try:
+        import camoufox  # noqa: F401
+        ok = True
+    except ImportError:
+        ok = False
+    if verbose:
+        if ok:
+            print("[ok] camoufox")
+        else:
+            print("[missing] camoufox -- required only for actual scraping.")
+            print("          install with: pip install -U camoufox[geoip]")
+            print("          then:         python -m camoufox fetch")
+            print("          --help and --check-deps work without it.")
+    return ok
 
 
 def scrape_with_camoufox(
@@ -96,15 +125,39 @@ def scrape_with_cf_clearance(
         return content, cookie_dict
 
 
-if __name__ == "__main__":
-    # Example: Basic scrape
-    html = scrape_with_camoufox(
-        "https://bot.sannysoft.com/",
-        screenshot="camoufox_test.png"
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        description="Camoufox anti-detection scraping template.",
+        epilog="Requires camoufox only for scraping; --help/--version/--check-deps do not.",
     )
+    ap.add_argument("--url", default="https://bot.sannysoft.com/",
+                    help="target URL (default: the bot-detection self-test page)")
+    ap.add_argument("--screenshot", help="optional path to save a full-page screenshot")
+    ap.add_argument("--cf-clearance", action="store_true",
+                    help="also extract cookies via scrape_with_cf_clearance()")
+    ap.add_argument("--version", action="version", version=f"camoufox_template {__version__}")
+    ap.add_argument("--check-deps", action="store_true",
+                    help="report whether camoufox is installed, then exit")
+    return ap
+
+
+if __name__ == "__main__":
+    args = build_parser().parse_args()
+
+    if args.check_deps:
+        sys.exit(0 if check_deps() else 1)
+
+    if not check_deps(verbose=False):
+        print("ERROR: camoufox not installed. Run: pip install -U camoufox[geoip]")
+        print("       then fetch the browser bundle: python -m camoufox fetch")
+        sys.exit(1)
+
+    html = scrape_with_camoufox(args.url, screenshot=args.screenshot)
     print(f"Page length: {len(html)} chars")
-    
-    # Example: Get Cloudflare cookies for curl_cffi reuse
-    # content, cookies = scrape_with_cf_clearance("https://cf-protected.com")
-    # from curl_cffi import requests
-    # r = requests.get("https://cf-protected.com/api", impersonate="chrome", cookies=cookies)
+
+    if args.cf_clearance:
+        # Get Cloudflare cookies for reuse with a fast HTTP client:
+        #   from curl_cffi import requests
+        #   r = requests.get(url, impersonate="chrome", cookies=cookies)
+        _content, cookies = scrape_with_cf_clearance(args.url)
+        print(f"Cookies obtained: {sorted(cookies)}")

@@ -9,6 +9,8 @@ Extraction quality determines downstream model and analytics quality.
 3. stable DOM selectors (CSS/XPath)
 4. LLM-assisted extraction for messy pages
 
+**Always prefer 1.** If an API exists, reverse it (`api-reverse-engineering.md`) rather than parsing HTML. HTML parsing is the most fragile layer and the first to break.
+
 ## Structured Data First
 
 Many pages expose product/article metadata in JSON-LD.
@@ -25,6 +27,8 @@ if node and node.string:
 
 Use this before brittle CSS selectors whenever available.
 
+**Also check for**: `__NEXT_DATA__` (Next.js), `__NUXT__` (Nuxt), `window.__INITIAL_STATE__`, `window.__APOLLO_STATE__` (Apollo/GraphQL). These often contain the entire page payload as one JSON blob — faster and more complete than DOM scraping.
+
 ## CSS vs XPath
 
 | Method | Strength | Weakness |
@@ -39,6 +43,8 @@ Use this before brittle CSS selectors whenever available.
 - add fallback selectors for known variants
 - validate extracted fields with schema constraints
 
+**Watch for obfuscated class names**: Chinese e-commerce and social sites frequently emit hashed class names (`_2x3fA`) that rotate on every deploy. Anchor on `data-*` attributes, `itemprop`, or text-relative XPath instead.
+
 ## Pagination and Incremental Crawls
 
 Capture:
@@ -47,6 +53,8 @@ Capture:
 - stable sorting key for resume
 
 Store crawl checkpoints so interrupted jobs resume deterministically.
+
+**Cursor pagination is safer than page numbers** on defended targets — page-number pagination often has a hard cap (e.g. 100 pages) that cursors do not.
 
 ## LLM-Assisted Extraction (Selective)
 
@@ -67,6 +75,18 @@ Persist at least three layers:
 
 This enables reprocessing when parser logic changes.
 
+## Anti-Bot-Aware Extraction
+
+Extraction design interacts with anti-bot strategy:
+
+| Situation | Extraction implication |
+|---|---|
+| Response is protobuf / custom binary | Decode with `blackboxprotobuf` / Kaitai, not regex |
+| Data arrives over WebSocket | Collect frames over time; do not expect a single response |
+| Data is in a `<script>` blob | Prefer parsing the blob to executing it |
+| Page is server-rendered per-request | Same URL may return different content — key your cache by request identity |
+| AI Labyrinth decoy page | Check `noindex` + invisible links before trusting content |
+
 ## Common Failure Modes
 
 | Failure | Fix |
@@ -74,5 +94,8 @@ This enables reprocessing when parser logic changes.
 | null spikes after layout change | add selector fallback set and smoke tests |
 | duplicated items | deduplicate on canonical key (url/id/hash) |
 | encoding artifacts | normalize unicode/whitespace early |
+| silently truncated results | verify against a known total count |
+| correct data, wrong ordering | capture the sort key explicitly |
+| works for 100 rows, fails at 1000 | pagination cap — switch to cursor/API |
 
 High-quality extraction pipelines are versioned data products, not one-off scripts.

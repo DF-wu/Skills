@@ -149,20 +149,52 @@ uncompyle6 target.pyc > target.py
 
 ## WASM Analysis
 
+WASM deserves its own document — see `wasm-reverse-engineering.md` for the full toolchain. The essentials:
+
 ```bash
-# Convert to WAT (text format)
+# Structure recon: imports/exports/types/sections
+wasm-objdump -x target.wasm
+
+# Quick intel
+strings -n 8 target.wasm | grep -iE "(api|key|token|secret|https)"
+
+# Text form
 wasm2wat target.wasm -o target.wat
 
-# Decompile to C-like
-wasm-decompile target.wasm -o target.c
+# Read the logic: to C, then optimize-compile into a native decompiler
+wasm2c target.wasm -o target.c
+gcc -g -O3 -I /usr/share/wabt/wasm2c /usr/share/wabt/wasm2c/wasm-rt-impl.c target.c -o target.o
+# then load target.o in IDA/Ghidra
 
-# Or load in Ghidra with WASM plugin
+# Or flatten to JS (often the fastest path)
+wasm2js target.wasm -o target.js
+```
+
+**Critical correction**: `wasm-decompile` belongs to **WABT**, not Binaryen — and **it was removed from WABT on 2026-06-22** (PR #2769, effective in wabt 1.0.42, reason: "unmaintained and acting mostly active as source of fuzzer bugs"). Pin wabt ≤ 1.0.41 if you need it.
+
+**Ghidra has no native WASM support.** Install the community plugin: https://github.com/nneonneo/ghidra-wasm-plugin (the upstream `garrettgu10` repo has not been pushed in 3 years; maintenance lives in the fork).
+
+**Runtime hooking is usually the fastest win** — you often do not need to understand the WASM at all:
+
+```js
+let wasmMemory;
+const hookedImports = { env: {
+  js_send_data: (ptr, len) => {
+    const mem = new Uint8Array(wasmMemory.buffer, ptr, len);
+    console.log('[OUTBOUND]', new TextDecoder().decode(mem));
+  },
+  memory: new WebAssembly.Memory({ initial: 256 }),
+}};
+wasmMemory = hookedImports.env.memory;
+WebAssembly.instantiateStreaming(fetch('app.wasm'), hookedImports);
 ```
 
 Key WASM patterns:
-- JavaScript bridge functions (imported from JS)
-- Memory layout and data sections
-- Call graph from JS entry points
+- JavaScript bridge functions (imported from JS) — replace the imports object to intercept all data flow
+- Linear memory reads: `new Uint8Array(wasmMemory.buffer, ptr, len)` + `TextDecoder`
+- Toolchain fingerprint: Emscripten (`__wasm_call_ctors`, `wasi_snapshot_preview1.*`), wasm-bindgen (`__wbindgen_malloc`, `__wbg_*`), AssemblyScript (`~lib/rt/...`)
+
+Dynamic analysis: **Wasabi** (bytecode-level instrumentation) and **Cetus** (browser extension, WASM "Cheat Engine" with memory watchpoints).
 
 ## Electron / NW.js Applications
 

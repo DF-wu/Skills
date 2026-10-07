@@ -68,6 +68,21 @@ scheduler -> url queue -> worker pool -> parser -> validation -> storage
 - store challenge outcomes to improve routing
 - trigger fallback path (managed API/browser escalation) automatically
 
+**Concrete routing decision**:
+
+```python
+# pseudo-code: choose transport per target, not per request
+TRANSPORT = {
+    "plain_site":    "httpx",
+    "cf_protected":  "curl_cffi",          # + residential proxy
+    "js_challenge":  "curl_cffi",          # + challenge solver
+    "spa_or_turnstile": "camoufox",        # browser path
+    "cn_risk_control": "cn_reverse_stack", # signed-param layer, NOT browser
+}
+```
+
+Route by target, not by request — per-request transport switching produces incoherent fingerprints.
+
 ## Data Contract Discipline
 
 Define schemas early:
@@ -83,3 +98,12 @@ Without schema/versioning, replay and audit become painful.
 - prioritize API endpoints over rendered pages
 - keep browser usage for pages that strictly require JS
 - batch writes to storage sinks
+- **measure useful-data-per-dollar, not requests-per-dollar** — a browser request that returns nothing costs the same as one that succeeds
+
+## When a Framework Is the Wrong Answer
+
+Frameworks add overhead. Skip them when:
+
+- the target is a single API with a signed parameter (write a thin client)
+- total volume is under ~10k requests (a script plus a queue is enough)
+- the real work is reverse engineering, not crawling (framework choice is irrelevant)

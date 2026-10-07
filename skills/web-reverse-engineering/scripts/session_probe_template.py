@@ -12,12 +12,22 @@ Usage:
     1. Export the target's cookies (Cookie-Editor JSON) to cookies.json
     2. Edit BASE / DASHBOARD / CANDIDATE_GETS / PAGES below
     3. python session_probe_template.py cookies.json
+
+Requires (only to actually probe): pip install -U camoufox[geoip] && python -m camoufox fetch
+
+--help and --check-deps work without camoufox installed. The import is deliberately lazy
+so that an eager failure does not hide the interface from someone who has not installed
+the browser bundle yet.
 """
+import argparse
 import asyncio
 import json
 import re
 import sys
+from pathlib import Path
 from urllib.parse import urljoin
+
+__version__ = "1.0.0"
 
 BASE = "https://example.com"
 DASHBOARD = f"{BASE}/dashboard"
@@ -67,10 +77,49 @@ async def req(page, url, method="GET", headers=None, body=None):
     return await page.evaluate(IN_PAGE_FETCH, {"m": method, "u": url, "h": headers, "b": body})
 
 
-async def main(cookie_file: str) -> int:
-    from camoufox.async_api import AsyncCamoufox
+def check_deps(verbose: bool = True) -> bool:
+    """Report whether camoufox is importable, without starting a browser."""
+    try:
+        import camoufox  # noqa: F401
+        ok = True
+    except ImportError:
+        ok = False
+    if verbose:
+        if ok:
+            print("[ok] camoufox")
+        else:
+            print("[missing] camoufox -- required only for actual probing.")
+            print("          install with: pip install -U camoufox[geoip]")
+            print("          then:         python -m camoufox fetch")
+            print("          --help and --check-deps work without it.")
+    return ok
 
-    raw = json.loads(open(cookie_file, encoding="utf-8").read())
+
+async def main(cookie_file: str) -> int:
+    try:
+        from camoufox.async_api import AsyncCamoufox
+    except ImportError:
+        print("ERROR: camoufox not installed. Run: pip install -U camoufox[geoip]")
+        print("       then fetch the browser bundle: python -m camoufox fetch")
+        return 1
+
+    path = Path(cookie_file)
+    if not path.exists():
+        print(f"ERROR: cookie file not found: {cookie_file}")
+        print("       export cookies as Cookie-Editor JSON and pass the path as the first argument.")
+        return 2
+
+    try:
+        with path.open(encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR: could not parse {cookie_file}: {exc}")
+        return 2
+
+    if not isinstance(raw, list):
+        print("ERROR: cookie file must be a JSON array (Cookie-Editor export format).")
+        return 2
+
     cookies = [c for c in (normalize(r) for r in raw) if c]
     print(f"injecting {len(cookies)} cookies: {[c['name'] for c in cookies]}")
 
@@ -104,5 +153,21 @@ async def main(cookie_file: str) -> int:
     return 0
 
 
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        description="Read-only authenticated-session probe (GET-only).",
+        epilog="Requires camoufox only for probing; --help/--version/--check-deps do not.",
+    )
+    ap.add_argument("cookies", nargs="?", default="cookies.json",
+                    help="path to a Cookie-Editor JSON export (default: cookies.json)")
+    ap.add_argument("--version", action="version", version=f"session_probe_template {__version__}")
+    ap.add_argument("--check-deps", action="store_true",
+                    help="report whether camoufox is installed, then exit")
+    return ap
+
+
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "cookies.json")))
+    args = build_parser().parse_args()
+    if args.check_deps:
+        raise SystemExit(0 if check_deps() else 1)
+    raise SystemExit(asyncio.run(main(args.cookies)))

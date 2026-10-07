@@ -2,6 +2,8 @@
 
 Mobile apps often expose simpler APIs than their web counterparts. The reverse engineering pipeline here is distinct from web scraping but shares the same philosophy: start at the highest layer, descend only when necessary.
 
+> **For the full 2026 toolchain, jailbreak/root availability matrix, and framework-specific paths (Flutter/Hermes), see `mobile-app-reverse-engineering.md`.** This page is the workflow; that page is the reference.
+
 ## Decision Tree
 
 ```text
@@ -10,6 +12,7 @@ Target is a mobile app
      -> Yes: Map API endpoints, replicate calls (easiest path)
      -> No: SSL pinning is active
         -> Try Frida/objection to bypass pinning
+        -> Try ecapture/r0capture (no CA needed)
         -> If that fails, patch APK or use Magisk modules
   -> API calls are signed/encrypted?
      -> Hook crypto functions with Frida to extract keys
@@ -17,6 +20,15 @@ Target is a mobile app
   -> Native library (.so) handles security?
      -> Ghidra/radare2 to analyze ARM binary
      -> Frida to hook JNI boundary
+  -> App is Flutter?
+     -> blutter (arm64 only, no Release builds)
+     -> reFlutter for proxy patch (only <= Flutter 3.24.x)
+  -> App uses Hermes (React Native)?
+     -> hbctool (only HBC 59/62/74/76)
+     -> hermes-dec for other versions
+  -> App is hardened (加壳)?
+     -> Identify shell generation, then use the matching unpacker
+     -> See the hardening table in cn-risk-control-ecosystem.md
 ```
 
 ## Environment Setup
@@ -40,16 +52,42 @@ pip install objection
 objection -g com.target.app explore
 ```
 
+**Android 14+ warning**: system CA certificates moved into the **Conscrypt APEX** module. Every classic tutorial that says "push your cert to `/system/etc/security/cacerts` and it works" is now wrong on Android 14+. Use an APEX-aware module (e.g. AlwaysTrustUserCerts) instead.
+
 ### iOS
 
 ```bash
-# Requires jailbroken device or Corellium
-# frida-ios-dump for decrypted IPA
+# Requires jailbroken device, or a Corellium instance
 pip install frida-tools
 frida-ps -U  # list apps on USB-connected device
+frida-ios-dump -u com.target.app -o target.ipa
 ```
 
+**Jailbreak reality check (2026)**:
+
+| Device / iOS | Public full jailbreak |
+|---|---|
+| A11 and below, iOS 14–16 | Dopamine (up to iOS 16.6.1) |
+| A12–A13, iOS 15–16.6.1 | Dopamine 2 |
+| A12–A16, iOS 17.0–18.x | **No public full jailbreak** |
+| A17+ / iOS 18+ | **No public full jailbreak** |
+| A18 / A19 (iPhone 16/17) | **No public jailbreak, no path** |
+
+Where jailbreak is unavailable: **TrollStore** (permanent app signing via CoreTrust bug, A12–A13 / iOS 14–17) still enables `frida-server` sideloading for many setups. For unjailbreakable devices, the practical path is **frida gadget injection into a repackaged IPA** — requires the IPA to be decrypted first, which itself requires a jailbroken or Corellium device.
+
 ## SSL Pinning Bypass
+
+### Escalation order (try in this sequence)
+
+| Order | Method | Notes |
+|---|---|---|
+| 1 | `objection` | Fastest, handles most cases |
+| 2 | `frida-multiple-unpinning` | Broader coverage than objection |
+| 3 | `ecapture` (eBPF uprobe) | **Captures TLS plaintext with NO CA installed** — bypasses the entire cert problem |
+| 4 | `r0capture` (Frida) | Hooks at the Java/native SSL layer |
+| 5 | Static patch + repackage | Last resort; breaks signatures |
+
+`ecapture` is the most under-used option. It hooks the TLS library's read/write at the kernel level via eBPF uprobe, so pinning implementations that validate certificates never see anything wrong — because you are not intercepting at the cert layer at all.
 
 ### Method 1: objection (easiest)
 
@@ -91,11 +129,8 @@ Java.perform(function () {
 ### Method 3: Patch APK (last resort)
 
 ```bash
-# Decompile
 apktool d app.apk -o app_dir
-
 # Find and patch pinning logic (search for TrustManager, OkHttp, etc.)
-# Then rebuild
 apktool b app_dir -o patched.apk
 jarsigner -keystore debug.keystore patched.apk alias
 ```
@@ -104,16 +139,16 @@ jarsigner -keystore debug.keystore patched.apk alias
 
 ### APK decompilation
 
-```bash
-# jadx GUI or CLI
-jadx -d output_dir app.apk
+| Tool | Strength |
+|---|---|
+| `jadx` | Best decompiler output; GUI + CLI |
+| `apktool` | Resources + smali; needed for repackaging |
+| `GDA` | Windows GUI, fast, no JVM |
+| `JEB` | Commercial; most capable for obfuscated code |
+| `bytecode-viewer` | Aggregates multiple decompilers |
+| `frida-dexdump` | **Dumps decrypted DEX from a running app** — essential when the APK is packed |
 
-# apktool for resources + smali
-apktool d app.apk
-
-# GDA (Windows GUI, fast)
-# JEB (commercial, most capable)
-```
+**Order matters**: if the APK is hardened (加壳), static analysis of the on-disk DEX gives you the shell, not the app. Dump the decrypted DEX at runtime first (`frida-dexdump`), then decompile that.
 
 ### Key things to find
 
@@ -124,6 +159,7 @@ apktool d app.apk
 | Crypto logic | `Cipher`, `MessageDigest`, `SecretKeySpec` | jadx class tree |
 | Native calls | `System.loadLibrary`, `JNI` | jadx + Ghidra |
 | Root detection | `su`, `magisk`, `supersu` | grep smali |
+| **Signature params** | `sign`, `_sign`, `signature` | jadx + Frida hook |
 
 ## Dynamic Analysis with Frida
 
@@ -157,14 +193,9 @@ Java.perform(function () {
 When security logic is in `.so` files:
 
 ```bash
-# Extract .so from APK
 unzip app.apk lib/* -d libs/
-
-# Analyze with Ghidra or radare2
 r2 -A libs/arm64-v8a/libtarget.so
 # then: ii (imports), iS (sections), afl (functions)
-
-# Or Ghidra GUI for decompilation
 ```
 
 Frida hook at JNI boundary:
@@ -181,27 +212,45 @@ Interceptor.attach(Module.findExportByName(null, "Java_com_target_app_Crypto_nat
 });
 ```
 
+**Note**: hardened apps strip exported JNI symbol names. When `findExportByName` returns null, enumerate `Module.enumerateSymbols()` and match by address, or hook `RegisterNatives` to capture the dynamic registration.
+
 ## iOS Specific
 
 ```bash
-# Dump decrypted IPA (jailbroken)
 frida-ios-dump -u com.target.app -o target.ipa
-
-# Class-dump for headers
 class-dump -H target.app -o headers/
-
-# Frida iOS hooking
-frida -U -n TargetApp -e "
-  var className = 'TargetClass';
-  var methodName = '- signRequest:';
-  var hook = ObjC.classes[className][methodName];
-  Interceptor.attach(hook.implementation, {
-    onEnter: function(args) {
-      console.log('signRequest called');
-    }
-  });
-"
 ```
+
+```javascript
+// Frida iOS hooking
+var hook = ObjC.classes['TargetClass']['- signRequest:'];
+Interceptor.attach(hook.implementation, {
+  onEnter: function(args) {
+    console.log('signRequest called');
+  }
+});
+```
+
+## Framework-Specific Paths
+
+| Framework | Detection | Tool | Constraint |
+|---|---|---|---|
+| **Flutter** | `libflutter.so` in `lib/` | `blutter` | **arm64 only, no Release binaries** — build from source |
+| **Flutter (proxy)** | same | `reFlutter` | Proxy patch only works on **Flutter ≤ 3.24.x** |
+| **React Native (Hermes)** | `libhermes.so` | `hbctool` | **Only HBC 59 / 62 / 74 / 76** |
+| **React Native (Hermes)** | same | `hermes-dec` | Broader version coverage |
+| **Unity** | `libunity.so`, `assets/bin/Data` | `Il2CppDumper` + `Il2CppInspector` | IL2CPP only, not Mono |
+| **Cordova/Ionic** | `www/` in assets | Plain unzip | No RE needed |
+
+## Hardening Shells (加固壳)
+
+| Generation | Examples | Approach |
+|---|---|---|
+| First (整体DEX加密) | early 梆梆/爱加密 | `frida-dexdump` after app start |
+| Second (抽取壳, 函数级) | 梆梆企业版, 娜迦 | Needs function-level dump, not whole-DEX |
+| Third (VMP + 自定义解释器) | 顶象, 几维 | Native-level analysis; treat as an L6 problem |
+
+For third-generation shells, the cost/benefit is usually bad. Reconsider whether the mobile path is cheaper than the web path for the same data.
 
 ## Replicating Mobile API from Desktop
 
@@ -213,7 +262,7 @@ Once you map the API:
 4. Use standard HTTP client with mobile headers
 
 ```python
-import requests
+from curl_cffi import requests
 
 headers = {
     "User-Agent": "TargetApp/2.1.0 (Android 14; Pixel 7)",
@@ -223,14 +272,29 @@ headers = {
     "X-Signature": "...",  # reimplement or intercept from app
 }
 
-resp = requests.get("https://api.target.com/v1/feed", headers=headers)
+resp = requests.get("https://api.target.com/v1/feed", headers=headers, impersonate="chrome")
 ```
+
+**Note**: mobile API endpoints often check the `User-Agent` for mobile-app markers. Using `impersonate="chrome"` gives you a browser TLS fingerprint, which can itself be inconsistent with a mobile UA. Prefer `impersonate="safari_ios"` or a matching mobile profile when the target distinguishes.
 
 ## Operational Security
 
 - Use a dedicated test device (don't RE on your daily driver)
 - Snapshot/reset the device between sessions
 - Some apps detect debuggers, emulators, root; have a bypass strategy ready
-- Respect app store policies; this is for your own app's API or public data only
+- Record the app version — everything you learn breaks on the next update
 
 Mobile RE opens APIs that web scraping cannot reach. It is higher effort but often higher reward.
+
+## Version Quick-Reference
+
+| Tool | Status (2026) |
+|---|---|
+| LSPosed | Official stopped at v1.9.2 (2023-10-11) → use **JingMatrix/Vector** |
+| Magisk | Active |
+| Xposed (original) | Archived |
+| Frida | Active |
+| objection | Active |
+| `ptswarm/reFlutter` | **Archived** → use `Impact-I/reFlutter` |
+| Stream (iOS capture app) | In App Store |
+| Thor | Removed from App Store |
