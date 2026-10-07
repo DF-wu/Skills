@@ -69,7 +69,7 @@ async def wait_for_site_ready(page, timeout_ms=30000):
     # - Minimum interactive elements (buttons, links)
     site_ready_js = """() => {
         const text = document.body?.innerText || '';
-        const blocked = /请进行验证|为了更好的访问体验|访问受限|Access denied|verify you are human/i.test(text);
+        const blocked = /\u8bf7\u8fdb\u884c\u9a8c\u8bc1|\u4e3a\u4e86\u66f4\u597d\u7684\u8bbf\u95ee\u4f53\u9a8c|\u8bbf\u95ee\u53d7\u9650|Access denied|verify you are human/i.test(text);
         if (blocked) return false;
         
         const captcha = document.querySelector('iframe[src*="captcha"], .nc-container');
@@ -145,7 +145,7 @@ async def dismiss_popups(page):
                 continue
             
             # Try text-based button matching first
-            for pattern in [r'关闭公告|Close', r'今日关闭|Dismiss']:
+            for pattern in ['\u5173\u95ed\u516c\u544a|Close', '\u4eca\u65e5\u5173\u95ed|Dismiss']:
                 btn = modal.get_by_role('button', name=re.compile(pattern, re.I))
                 try:
                     if await btn.first.is_visible():

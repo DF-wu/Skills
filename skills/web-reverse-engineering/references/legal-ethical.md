@@ -6,11 +6,11 @@ This is an engineering reference, not legal advice. Use it to build intuition, t
 
 | Category | What it is | Typical trigger |
 |---|---|---|
-| **Criminal unauthorized access** | Violating computer fraud statutes (CFAA, 刑法 285/286, etc.) | Bypassing technical access controls: passwords, encryption, authentication gates |
+| **Criminal unauthorized access** | Violating computer fraud statutes (CFAA, Criminal Law Art. 285/286 (CN), etc.) | Bypassing technical access controls: passwords, encryption, authentication gates |
 | **Civil contract dispute** | Violating Terms of Service | Scraping public pages after the provider says "don't" |
 | **Privacy regulation** | GDPR, PIPL, CCPA, etc. | Collecting, processing, or retaining personal data |
 | **IP/database rights** | Copyright, sui generis database rights | Replicating creative selection/arrangement or substantial database investment |
-| **Unfair competition** | 反不正当竞争法 (CN) | Acquiring/using another's data by defeating technical measures |
+| **Unfair competition** | Anti-Unfair Competition Law (CN) | Acquiring/using another's data by defeating technical measures |
 
 **The key insight:** In most jurisdictions, scraping publicly available data from unauthenticated pages does not constitute criminal "unauthorized access." The hiQ v. LinkedIn precedent (US) and similar rulings elsewhere established that technical barriers matter, not contractual text alone.
 
@@ -44,21 +44,21 @@ This is an engineering reference, not legal advice. Use it to build intuition, t
 
 | Provision | Content |
 |---|---|
-| 刑法 285(2) | 非法获取计算机信息系统数据 |
-| 刑法 285(3) | 提供侵入、非法控制计算机信息系统的程序、工具 |
-| 刑法 286 | 破坏计算机信息系统 |
+| Criminal Law Art. 285(2) | Illegally obtaining computer information system data |
+| Criminal Law Art. 285(3) | Providing programs or tools for intrusion into, or illegal control of, computer information systems |
+| Criminal Law Art. 286 | Destroying computer information systems |
 
-**Thresholds** (法释〔2011〕19号): 违法所得 5,000元 / 经济损失 1万元.
+**Thresholds** (SPC/SPP Judicial Interpretation No. 19 [2011]): illegal gains CNY 5,000 / economic loss CNY 10,000.
 
 **Cases**:
 
 | Case | Citation | Outcome |
 |---|---|---|
-| 晟品公司 | (2017)京0108刑初2384号 | **全国首例爬虫入刑** — forged `device_id` / UA / IP |
-| 百度网盘 | (2019)苏1091刑初157号 | Criminal liability |
-| 武汉元光「车来了」 | — | Criminal liability |
-| 得物 | (2022)苏0213刑初223号 | Criminal liability |
-| 上海普陀王某 | — | 违法所得 60余万，判三缓三，罚金 8万 |
+| Shengpin | (2017) Jing 0108 Xing Chu No. 2384 | **First criminal crawler conviction in China** — forged `device_id` / UA / IP |
+| Baidu Netdisk | (2019) Su 1091 Xing Chu No. 157 | Criminal liability |
+| Wuhan Yuanguang ("Chelaile") | — | Criminal liability |
+| Dewu | (2022) Su 0213 Xing Chu No. 223 | Criminal liability |
+| Shanghai Putuo, defendant Wang | — | Illegal gains over CNY 600,000; 3-year sentence suspended for 3 years; fine CNY 80,000 |
 
 **Pattern**: Criminal exposure in China attaches to **defeating technical measures** (forged device fingerprints, bypassed authentication), not to reading public pages.
 
@@ -66,27 +66,27 @@ This is an engineering reference, not legal advice. Use it to build intuition, t
 
 | Case | Citation | Outcome |
 |---|---|---|
-| 大众点评诉百度 | (2015)浦民三(知)初字第528号 / (2016)沪73民终242号 | 300万 + 23万；**robots.txt does not govern post-crawl use** |
-| 百度诉360 | (2013)一中民初字第2668号 | 50万；robots protocol is not a contract but constitutes recognized business ethics |
-| 新浪微博诉脉脉 | (2015)海民(知)初字第12602号 / (2016)京73民终588号 | 200万；**三重授权原则** (user→platform, platform→developer, user→developer) |
-| 抖音诉六界小葫芦 | (2021)浙0110民初2914号 | 100万 |
-| 抖竹刷量 / 抖商商标 | — | 100万 / 200万 |
+| Dianping v. Baidu | (2015) Pu Min San (Zhi) Chu No. 528 / (2016) Hu 73 Min Zhong No. 242 | CNY 3.0M + CNY 230K;**robots.txt does not govern post-crawl use** |
+| Baidu v. 360 | (2013) Yi Zhong Min Chu No. 2668 | CNY 500K;robots protocol is not a contract but constitutes recognized business ethics |
+| Sina Weibo v. Maimai | (2015) Hai Min (Zhi) Chu No. 12602 / (2016) Jing 73 Min Zhong No. 588 | CNY 2.0M; **three-way authorization principle** (user→platform, platform→developer, user→developer) |
+| Douyin v. Liujie Xiaohulu | (2021) Zhe 0110 Min Chu No. 2914 | CNY 1.0M |
+| Douzhu traffic inflation / Doushang trademark | — | CNY 1.0M / CNY 2.0M |
 
-**反不正当竞争法 2025 revision** (passed 2025-06-27, effective **2025-10-15**):
+**Anti-Unfair Competition Law, 2025 revision** (passed 2025-06-27, effective **2025-10-15**):
 
-- **Art. 13 new para 3**: bans acquiring or using others' data by 欺诈 / 胁迫 / **避开或破坏技术管理措施**
-- **Art. 13 new para 4**: bans 滥用平台规则
+- **Art. 13 new para 3**: bans acquiring or using others' data by deception / coercion / **circumventing or destroying technical management measures**
+- **Art. 13 new para 4**: bans abuse of platform rules
 
-**This is the most important recent change.** 「避开或破坏技术管理措施」 now has explicit statutory footing — meaning anti-bot evasion moves closer to the unfair-competition core in China than in the US.
+**This is the most important recent change.** "Circumventing or destroying technical management measures" now has explicit statutory footing — meaning anti-bot evasion moves closer to the unfair-competition core in China than in the US.
 
 ## China: Data Protection
 
 | Instrument | Provision |
 |---|---|
 | PIPL Art. 13(6) | Lawful basis for processing publicly disclosed personal info |
-| PIPL Art. 27 | 已公开个人信息 may be processed within 合理范围; **明确拒绝除外**; 重大影响 requires consent |
-| 合规审计指引 第十二条 | Lists 5 violation patterns including scale / duration / purpose exceeding 合理范围 |
-| 网络数据安全管理条例 Art. 24 | Automated collection must delete or anonymize unnecessary personal info |
+| PIPL Art. 27 | Already-public personal information may be processed within a reasonable scope; **except where the individual has explicitly refused**; significant impact requires consent |
+| Compliance Audit Guidelines, Art. 12 | Lists 5 violation patterns, including scale / duration / purpose exceeding a reasonable scope |
+| Regulations on the Administration of Network Data Security, Art. 24 | Automated collection must delete or anonymize unnecessary personal info |
 
 **Practical reading**: Publicly disclosed ≠ free to collect at scale. Scale, duration, and purpose are the operative tests.
 
@@ -105,7 +105,7 @@ This is an engineering reference, not legal advice. Use it to build intuition, t
 | Public pages, high volume, commercial reuse | Very low | Medium | Document lawful basis, assess database rights exposure |
 | Authenticated scraping (your own account) | Low | Medium | Review ToS for account termination risk |
 | Bypassing auth/paywalls/technical controls | **High** | High | Do not proceed without explicit legal clearance |
-| Forging device fingerprints to defeat risk control | **High (CN)** | High | This is the specific trigger in the 晟品 line of cases |
+| Forging device fingerprints to defeat risk control | **High (CN)** | High | This is the specific trigger in the Shengpin line of cases |
 | Large-scale PII collection | Low (if public) | **High** | GDPR/PIPL obligations apply; implement data minimization and deletion |
 | Scraping government, medical, financial records | Context-dependent | Context-dependent | Consult counsel; these categories attract heightened scrutiny |
 | Scraping against an explicit AI-training reservation | Low | Medium–High | EU DSM Art. 4(3) opt-out may apply; Content Signals encodes this |
@@ -153,7 +153,7 @@ Pause and seek legal counsel when:
    → No: Proceed with standard operational hygiene.
 
 4. Did you defeat a technical measure to obtain it?
-   → Yes: In China, assume 反不正当竞争法 Art. 13 exposure. Reassess.
+   → Yes: In China, assume Anti-Unfair Competition Law Art. 13 exposure. Reassess.
    → No: Proceed.
 ```
 
@@ -167,7 +167,7 @@ A practical scraping operation distinguishes between real legal threats and plat
 - X Corp. v. Bright Data dismissal — https://blog.ericgoldman.org/archives/2024/05/x-corp-v-bright-data-is-the-decision-weve-been-waiting-for-guest-blog-post.htm
 - EDPB Opinion 28/2024 — https://edpb.europa.eu/system/files/2024-12/edpb_opinion_202428_ai-models_en.pdf
 - DSM Directive 2019/790, Database Directive 96/9/EC — https://eur-lex.europa.eu
-- 反不正当竞争法 2025 修订 — https://xzfg.moj.gov.cn/front/law/detail?LawID=1734
-- 最高法 2026 反不正当竞争典型案例 — https://court.gov.cn/zixun/xiangqing/449641.html
+- Anti-Unfair Competition Law 2025 revision — https://xzfg.moj.gov.cn/front/law/detail?LawID=1734
+- Supreme People's Court 2026 typical anti-unfair-competition cases — https://court.gov.cn/zixun/xiangqing/449641.html
 - NYT v. OpenAI MTD opinion — https://nysd.uscourts.gov/sites/default/files/2025-04/yf%2023cv11195%20OpenAI%20MTD%20opinion%20april%204%202025.pdf
 - Cloudflare Content Signals Policy — https://blog.cloudflare.com/content-signals-policy

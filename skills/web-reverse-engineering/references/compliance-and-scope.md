@@ -145,8 +145,8 @@ exception that rights holders can reserve — which is why machine-readable rese
 (see §7) matter.
 
 **China.** Reverse engineering for interoperability is recognized in principle, but the
-2025 revision of the Anti-Unfair Competition Law (反不正当竞争法, effective
-**2025-10-15**) added explicit language targeting 避开或破坏技术管理措施 — circumventing or
+2025 revision of the Anti-Unfair Competition Law, effective
+**2025-10-15**) added explicit language targeting circumvention or destruction of technical management measures — that is, circumventing or
 destroying technical management measures. This makes anti-bot evasion materially riskier
 in China than in the US or EU. See [`legal-ethical.md`](legal-ethical.md).
 
@@ -307,30 +307,3 @@ If you are an agent reading this skill, apply the following:
 - Statutory research exemptions exist, are time-limited, and must be re-verified.
 - Commercial gates are decisions, not obstacles.
 - When authorization is unclear, ask. Do not proceed carefully — ask.
-
----
-
-## 中文摘要
-
-本技能是**知识库与工具模板**，不是攻击工具，也不对任何目标自行采取行动。
-
-**核心区分**：技术是中立的，授权不是。区分合法与违法的不是"用了哪个工具"，而是"动的是谁的系统"。
-
-**合法场景**：授权渗透测试、漏洞赏金（范围由项目政策授权）、安全研究（协同披露）、应急响应与恶意样本分析、互操作性开发、数据可携与归档、学术研究与 CTF、访问自己的账号与系统、对公开数据的合法访问。
-
-**越界场景**：仅有公网可达性不等于授权；探测公开可达系统找漏洞不等于允许；第三方客户账号不是你的账号；雇主内网可达不等于授权。授权不明时应**书面询问系统所有者**，而不是"小心地继续"。
-
-**三类风险不要混为一谈**：
-- 违反 ToS 是民事合同问题，本身不构成犯罪。
-- 绕过**认证**（authentication）是刑法红线；绕过**反爬挑战**通常不是。
-- 规避版权作品的**技术保护措施**（TPM）是第三类独立风险（美国 DMCA §1201、欧盟指令），有各自的规则。
-
-**法定研究豁免存在但有时限**：美国 DMCA §1201 第九次三年期规则制定（2024-10-28 生效）续期并扩展了安全研究与车辆运行数据等豁免，**有效期至 2027-10-28**；第十次程序已于 2026 年启动。使用前必须核实当前状态。欧盟 2009/24/EC 第 6 条允许为互操作性反编译；DSM 指令第 3/4 条涉及文本与数据挖掘。中国 2025 年修订的《反不正当竞争法》（2025-10-15 生效）新增针对"避开或破坏技术管理措施"的条款，因此在中国做反爬规避的法律风险显著高于美欧。
-
-**机器可读偏好声明**：`robots.txt`（RFC 9309，事实标准）、`Content-Signal`（Cloudflare 2025-09-24，厂商提案）、`TDMRep`（W3C 社区组，对齐欧盟 DSM 第 4 条）、`ai.txt`、`llms.txt`（**仅为导航，不授予也不保留任何权利**）、`Content-Usage`（IETF AIPREF 草案）。德国法院 2025 年 12 月认定：埋在服务条款里的自然语言退出声明无效，**机器可读**的保留才有效。
-
-**商业闸门不是技术障碍**：HTTP 402 或 `crawler-*` 头是明确的商业信号，不是待解的谜题。正确答案是评估授权或换数据源，而不是升级规避手段。
-
-**停止条件**：说不出"谁授权、范围是什么"；需要绕过认证而非反爬挑战；目标是安全关键或医疗系统；需要访问他人账号或数据；被要求规避非自有系统的监控；收到停止函或法律程序。
-
-详见 [`legal-ethical.md`](legal-ethical.md)（判例、刑法 285/286 门槛、风险矩阵）。

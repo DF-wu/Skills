@@ -16,9 +16,9 @@ CAPTCHA should be treated as a symptom, not the core problem.
 | image checkbox/grid | reCAPTCHA v2, hCaptcha | solvable via provider APIs |
 | score-based invisible | reCAPTCHA v3 | highly sensitive to identity quality |
 | managed challenges | Turnstile, enterprise variants | often triggered by risk scoring, not static puzzles |
-| slider / drag | 极验, 阿里, 腾讯, 数美 | dominant in the Chinese ecosystem; trajectory-sensitive |
-| click-order / puzzle | 极验 click, 易盾 type 7 | coordinate sequence matters |
-| proof-of-work | Anubis, 腾讯 TCaptcha | cost-based, not recognition-based |
+| slider / drag | GeeTest, Aliyun, Tencent, Shumei | dominant in the Chinese ecosystem; trajectory-sensitive |
+| click-order / puzzle | GeeTest click, Yidun type 7 | coordinate sequence matters |
+| proof-of-work | Anubis, Tencent TCaptcha | cost-based, not recognition-based |
 
 For the Chinese vendor breakdown (GeeTest, Aliyun, Tencent TCaptcha, NetEase Yidun, Shumei, Dingxiang, Tongdun) see `captcha-vendors-cn.md`.
 
@@ -30,7 +30,7 @@ For the Chinese vendor breakdown (GeeTest, Aliyun, Tencent TCaptcha, NetEase Yid
 | CapSolver-like APIs | modern challenge coverage | cost and provider dependency |
 | in-house model approach | control and privacy | expensive to build/maintain |
 | **pure-algorithm reversal** | zero per-solve cost, high throughput | high upfront cost, breaks on target updates |
-| **environment simulation (补环境)** | runs vendor JS locally | must defeat environment checks |
+| **environment simulation** | runs vendor JS locally | must defeat environment checks |
 
 ## Choosing a Route
 
@@ -61,7 +61,7 @@ submit(solution.token)
 
 ## Environment Simulation Route
 
-For vendors whose logic runs in obfuscated JS (极验, 数美, 易盾), the highest-leverage route is to run their own code in a controlled Node environment:
+For vendors whose logic runs in obfuscated JS (GeeTest, Shumei, Yidun), the highest-leverage route is to run their own code in a controlled Node environment:
 
 1. Build a browser-like environment (`window`, `document`, `navigator`, `screen`, Canvas)
 2. Execute the vendor's challenge script inside it

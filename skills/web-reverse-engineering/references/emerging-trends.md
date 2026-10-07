@@ -119,11 +119,11 @@ Full reference: `wasm-reverse-engineering.md`.
 
 Chinese defenses differ structurally from Western ones: **signed-parameter-first rather than fingerprint-first**. The near-zero-coverage areas for most practitioners:
 
-- 瑞数 RiverSecurity — dynamic VM + eval, **no universal solution, one script per site**
+- RiverSecurity — dynamic VM + eval, **no universal solution, one script per site**
 - JSVMP — obfuscator.io's own docs state no automated deobfuscator exists
-- 补环境 (environment simulation) — the highest-leverage technique for the whole ecosystem
-- 小程序 (mini-program) reverse engineering — wxapkg / TTPKG / Alipay `.tar`
-- Device fingerprint vendors — 易盾 / 数美 / 顶象 / 同盾 Blackbox
+- Environment simulation (bu-huanjing) — the highest-leverage technique for the whole ecosystem
+- Mini-program reverse engineering — wxapkg / TTPKG / Alipay `.tar`
+- Device fingerprint vendors — Yidun / Shumei / Dingxiang / Tongdun Blackbox
 
 **Key structural insight**: passing the challenge layer is **not** passing the risk engine. Short cookies may pass the page but fail the data API, because the fingerprint is validated separately downstream.
 
@@ -185,7 +185,7 @@ Real-time features increasingly use:
 - broader use of defensive behavioral biometrics
 - WASM-based challenge protocols replacing pure JS
 - QUIC/HTTP3 fingerprinting as a new detection layer
-- Chinese vendors moving more logic into WASM (极验 v4 already partially does)
+- Chinese vendors moving more logic into WASM (GeeTest v4 already partially does)
 
 Treat this field as continuous operations, not a one-time implementation.
 
@@ -208,5 +208,5 @@ Treat this field as continuous operations, not a one-time implementation.
 - ecapture: https://github.com/gojue/ecapture
 - obfuscator.io JSVMP position: https://obfuscator.io
 - sdenv: https://github.com/pysunday/sdenv
-- 社区风控集合: https://1997.pro/archives/1713518394359
+- Community risk-control collection: https://1997.pro/archives/1713518394359
 - Android Conscrypt APEX: https://blog.nviso.eu/2025/06/05/intercepting-traffic-on-android-with-mainline-and-conscrypt/

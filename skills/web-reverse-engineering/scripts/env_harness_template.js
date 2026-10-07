@@ -1,10 +1,10 @@
 /**
- * env_harness_template.js - Environment simulation (补环境) skeleton for running
+ * env_harness_template.js - Environment simulation (bu-huanjing) skeleton for running
  * vendor risk-control JS in Node.
  *
  * Purpose: instead of hand-porting a vendor's signing algorithm, run THEIR code in a
  * controlled browser-like environment and capture the parameters it produces. This is
- * the highest-leverage technique against Chinese risk-control vendors (瑞数, 数美, 易盾).
+ * the highest-leverage technique against Chinese risk-control vendors (RiverSecurity, Shumei, Yidun).
  *
  * This is a SKELETON with the detection points that actually matter already handled.
  * Fill in the target-specific parts (marked TODO) for your site.
@@ -559,7 +559,7 @@ function run(vendorScriptPath, options = {}) {
  */
 function reportCaptured(win, extraKeys = []) {
   const known = [
-    '$_ts',                    // 瑞数 dynamic config
+    '$_ts',                    // RiverSecurity dynamic config
     '__captured',              // your own capture point
     '__vendorResults',         // test-harness output
     '__NEXT_DATA__',

@@ -1,104 +1,104 @@
-# 验证码与设备指纹厂商专项（GeeTest / Aliyun / Tencent / NetEase / Shumei / Dingxiang / Tongdun）
+# CAPTCHA and Device-Fingerprint Vendor Deep Dive (GeeTest / Aliyun / Tencent / NetEase / Shumei / Dingxiang / Tongdun)
 
-本文按厂商逐一拆解参数结构。**通用原则**：先判断是「验证码」还是「设备指纹」，两者目标不同——验证码要拿到 `validate`/`token`，设备指纹要产出稳定的 `deviceId`/`blackbox`。
+This document breaks down parameter structures vendor by vendor. **General principle**: first decide whether you are dealing with a "CAPTCHA" or a "device fingerprint" -- the two have different goals. A CAPTCHA must yield a `validate`/`token`; a device fingerprint must produce a stable `deviceId`/`blackbox`.
 
-## 极验 GeeTest
+## GeeTest (Jiyan)
 
-### 三代（v3）
+### Generation 3 (v3)
 
-**接口链**：
+**Endpoint chain**:
 
-| 步骤 | 接口 | 产出 |
+| Step | Endpoint | Output |
 |---|---|---|
-| 1 | `register-slide-official` / `register-slider` / `register-click-official` | `gt`（站点固定特征码）、`challenge`（每次变化） |
-| 2 | `gettype.php` | 携带 `gt`，返回验证码类型 |
-| 3 | `get.php` | `c`、`s`、滑块图/底图 |
-| 4 | `ajax.php` | 模式（`slide`/`click`）；通过后返回 `validate` |
-| 5 | `validate.php` | 服务端二次校验 |
+| 1 | `register-slide-official` / `register-slider` / `register-click-official` | `gt` (site-fixed feature code), `challenge` (changes every time) |
+| 2 | `gettype.php` | carries `gt`, returns the CAPTCHA type |
+| 3 | `get.php` | `c`, `s`, slider image / background image |
+| 4 | `ajax.php` | mode (`slide`/`click`); returns `validate` once passed |
+| 5 | `validate.php` | server-side second validation |
 
-**w 参数**：三代有**三个 w**（`get.php` 两次 + `ajax.php` 一次）。
+**w parameter**: generation 3 has **three w values** (two from `get.php` + one from `ajax.php`).
 
-- **旧版**：除最后一个 `ajax.php` 外，w 可为空字符串
-- **新版**：三个 w 相互关联，**任一错误即 `forbidden`**
+- **Old version**: apart from the final `ajax.php`, w may be an empty string
+- **New version**: the three w values are mutually linked, and **any one of them being wrong means `forbidden`**
 
-**w 构成**：
+**w composition**:
 
 ```
-w = AES(明文) + RSA(16 位随机字符串密钥)
+w = AES(plaintext) + RSA(16-char random string key)
 ```
 
-AES 明文含 `gt`、`challenge`、用户 IP、版本、`c`、`s`、浏览器信息、鼠标轨迹。RSA 部分为 16 位随机字符串经 RSA 公钥加密。
+The AES plaintext contains `gt`, `challenge`, the user IP, version, `c`, `s`, browser information, and the mouse trajectory. The RSA part is a 16-character random string encrypted with the RSA public key.
 
-**细节**：`h9s9` 等为固定参数；三代点选类 AES 的 **iv 为 `0000000000000000`**。
+**Details**: `h9s9` and the like are fixed parameters; for generation-3 click-select, the AES **iv is `0000000000000000`**.
 
-**定位技巧**：全局搜索特征码 `"\u0077"`（即 `w` 的 Unicode 转义），进入 `slide.X.Y.Z.js` / `click.X.Y.Z.js`。
+**Locating trick**: globally search for the signature `"\u0077"` (that is, the Unicode escape of `w`) to get into `slide.X.Y.Z.js` / `click.X.Y.Z.js`.
 
-### 四代（v4）
+### Generation 4 (v4)
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| 站点标识 | 仅 `captcha_id`（无 `gt`/`challenge`） |
-| load 接口 | `gcaptcha4.geetest.com/load` |
-| verify 接口 | `gcaptcha4.geetest.com/verify` |
-| load 返回 | `lot_number`、`captcha_type`、`bg`、`slice`、`ypos`、`pow_detail`（`version`/`bits`/`datetime`/`hashfunc`）、`payload`、`process_token`、`payload_protocol` |
-| verify 参数 | `lot_number`、`payload`、`process_token`、`payload_protocol`、`pt`、`w`、`callback` |
-| verify 返回 | `result: success/fail` |
+| Site identifier | only `captcha_id` (no `gt`/`challenge`) |
+| load endpoint | `gcaptcha4.geetest.com/load` |
+| verify endpoint | `gcaptcha4.geetest.com/verify` |
+| load returns | `lot_number`, `captcha_type`, `bg`, `slice`, `ypos`, `pow_detail` (`version`/`bits`/`datetime`/`hashfunc`), `payload`, `process_token`, `payload_protocol` |
+| verify parameters | `lot_number`, `payload`, `process_token`, `payload_protocol`, `pt`, `w`, `callback` |
+| verify returns | `result: success/fail` |
 
-**w 结构**：
+**w structure**:
 
 ```
 w = hex(AES_CBC(w_data, aes_key)) + hex(RSA_Encrypt(aes_key))
 ```
 
-**PoW**：按 `pow_detail.bits` 与 `hashfunc` 做哈希碰撞，产出 `pow_msg` / `pow_sign`。
+**PoW**: perform a hash collision according to `pow_detail.bits` and `hashfunc`, producing `pow_msg` / `pow_sign`.
 
-**其他字段**：
+**Other fields**:
 
-- `device_id`（同站点固定）
-- `userresponse`（社区给出 `setLeft / 1.0059466666666665 + 2`，属经验拟合值，需按目标实测校准）
+- `device_id` (fixed for the same site)
+- `userresponse` (the community gives `setLeft / 1.0059466666666665 + 2`; this is an empirically fitted value and must be calibrated by measurement against the target)
 - `passtime`
-- **时间格式必须为带 `+08:00` 时区的 ISO 字符串**
+- **The time format must be an ISO string carrying the `+08:00` timezone**
 
-**JSONP 陷阱**：响应为 JSONP，需**动态定位 `(` / `)` 解析**，不能硬编码偏移——callback 名长度随时间戳变化。
+**JSONP trap**: the response is JSONP, so you must **locate `(` / `)` dynamically to parse it**; you cannot hardcode offsets -- the callback name length varies with the timestamp.
 
-> 部分版本关键逻辑下沉 WASM（AES-CBC + HMAC-SHA256）的说法来自社区，本轮**未定位到可引用来源，属未核实**。若遇 WASM 路径，见 `wasm-reverse-engineering.md`。
+> The claim that some versions push key logic down into WASM (AES-CBC + HMAC-SHA256) comes from the community; this round **found no citable source, so it is unverified**. If you hit a WASM path, see `wasm-reverse-engineering.md`.
 
-### GeeGuard（设备指纹，非验证码）
+### GeeGuard (device fingerprint, not a CAPTCHA)
 
-`gee_guard` / GeeGuard 是极验的**设备指纹产品**，不是验证码接口。能力为本地生成短期可信设备 GeeToken，并与业务方业务唯一标识**双向绑定**（通过签名，仅对当前业务流程有效）。
+`gee_guard` / GeeGuard is GeeTest's **device-fingerprint product**, not a CAPTCHA endpoint. Its capability is to locally generate a short-lived trusted-device GeeToken and to **bidirectionally bind** it to the business party's unique business identifier (by signature, valid only for the current business flow).
 
-鸿蒙版 SDK 权限：`INTERNET` / `GET_NETWORK_INFO` / `STORE_PERSISTENT_DATA`，可选 `APP_TRACKING_CONSENT`（OAID）。
+HarmonyOS SDK permissions: `INTERNET` / `GET_NETWORK_INFO` / `STORE_PERSISTENT_DATA`, optionally `APP_TRACKING_CONSENT` (OAID).
 
-> `gee_guard` 作为 Cookie 名或参数名出现的用法**未核实**；已核实的只是 GeeGuard 为产品名。
+> The usage of `gee_guard` as a cookie name or parameter name is **unverified**; what is verified is only that GeeGuard is a product name.
 
-**官方隐私政策披露的采集面**（可直接用于判断检测维度）：设备信息、设备网络信息、设备环境信息（含越狱/调试/模拟器/代码篡改标识、UA、referer）、**用户生物轨迹信息**（滑动/点击/鼠标移动轨迹）、时间戳、安装包名。
+**Collection surface disclosed in the official privacy policy** (directly usable for inferring the detection dimensions): device information, device network information, device environment information (including jailbreak/debugging/emulator/code-tampering indicators, UA, referer), **user biometric trajectory information** (slide/click/mouse-movement trajectories), timestamp, installer package name.
 
-## 阿里云盾 / 阿里 WAF
+## Aliyun Cloud Shield / Aliyun WAF
 
-### Cookie 体系（官方文档明示）
+### Cookie system (explicitly stated in official docs)
 
-阿里云官方合规声明给出**三种植入场景**：
+The official Aliyun compliance statement gives **three injection scenarios**:
 
-| 场景 | 触发条件 | 植入 Cookie | 用途 |
+| Scenario | Trigger condition | Injected cookie | Purpose |
 |---|---|---|---|
-| 一 | 使用 CC 防护/扫描防护且请求 Cookie 不含 `acw_tc` | `acw_tc`、`cdn_sec_tc` | 区分统计不同客户端；配合「统计对象为 session」的防护规则判断 CC 攻击 |
-| 二 | 站点配置 Bot 管理高级模式并开启自动集成 Web SDK | `ssxmod_itna`、`ssxmod_itna2`、`ssxmod_itna3` | 收集指纹（含 HTTP 报文 `host` 字段、浏览器高度宽度等） |
-| 三 | WAF 自定义规则或 Bot 管理规则动作开启 JS 校验 / 滑块 | `acw_sc__v2`（JS 校验通过）、`acw_sc__v3`（滑块通过） | 验证通过凭证 |
+| One | CC protection / scan protection is in use and the request cookie does not contain `acw_tc` | `acw_tc`, `cdn_sec_tc` | distinguish and count different clients; together with the protection rule whose "statistical object is session", determine CC attacks |
+| Two | the site configures Bot management advanced mode and enables automatic Web SDK integration | `ssxmod_itna`, `ssxmod_itna2`, `ssxmod_itna3` | collect fingerprints (including the HTTP message `host` field, browser height/width, etc.) |
+| Three | a WAF custom rule or Bot management rule action enables JS verification / slider | `acw_sc__v2` (JS verification passed), `acw_sc__v3` (slider passed) | proof of passing verification |
 
-**官方细节**：
+**Official details**:
 
-- 处置动作过期时间：验证通过后默认 **1800 秒（30 分钟）**内放行，可配 5–1800 秒
-- WAF 3.0 防护对象设置：跟踪 cookie 即 `acw_tc`，可配置下发状态与 `secure` 属性，**`SameSite` 属性暂不支持配置**；滑块 cookie 即 `acw_sc__v3`，可配置 `secure`
-- `acw_tc` 示例值：`2f7b12da17525774695245703ee21f15714874ac9b5788522f6bf6f459`，`path=/; HttpOnly; Max-Age=3600`
+- Action expiry time: after verification passes, traffic is allowed by default within **1800 seconds (30 minutes)**; configurable 5-1800 seconds
+- WAF 3.0 protected-object settings: the tracking cookie is `acw_tc`, whose issuance state and `secure` attribute are configurable, and **the `SameSite` attribute cannot be configured for now**; the slider cookie is `acw_sc__v3`, whose `secure` is configurable
+- `acw_tc` example value: `2f7b12da17525774695245703ee21f15714874ac9b5788522f6bf6f459`, `path=/; HttpOnly; Max-Age=3600`
 
-**结论对照**：
+**Conclusion mapping**:
 
-- `acw_tc` = 客户端会话跟踪 Cookie
-- `cdn_sec_tc` = 同类会话标记（标记不同客户端会话、统计同一会话发起攻击频率）
-- `acw_sc__v2` = JS 挑战通过凭证
-- `acw_sc__v3` = 滑块验证通过凭证
+- `acw_tc` = client session tracking cookie
+- `cdn_sec_tc` = same-class session marker (marks different client sessions, counts how often the same session launches attacks)
+- `acw_sc__v2` = JS challenge pass credential
+- `acw_sc__v3` = slider verification pass credential
 
-### `acw_sc__v2` 生成算法（社区可复现）
+### `acw_sc__v2` generation algorithm (community-reproducible)
 
 ```python
 def unsbox(arg1):
@@ -123,49 +123,49 @@ def get_acw_sc_v2(arg1):
     return hexXor(unsbox(arg1))
 ```
 
-即 `acw_sc__v2 = hexXor(unsbox(arg1))`。
+That is, `acw_sc__v2 = hexXor(unsbox(arg1))`.
 
-- `arg1` 是 **40 位 hex 字符串，每次刷新动态变化**（由 202 响应内联脚本给出）
-- `arg2` 即最终 Cookie 值
+- `arg1` is a **40-character hex string that changes dynamically on every refresh** (supplied by the inline script in the 202 response)
+- `arg2` is the final cookie value
 
-**JS 原版特征**：含 `while (window["_phantom"] || window["__phantomas"]) {}` 死循环（针对 Selenium/Phantomas 类自动化）与 `var _0x5e8b26 = "3000176000856006061501533003690027800375";`，最终触发 `reload(arg2)`。
+**Original JS characteristics**: it contains the infinite loop `while (window["_phantom"] || window["__phantomas"]) {}` (aimed at Selenium/Phantomas-class automation) and `var _0x5e8b26 = "3000176000856006061501533003690027800375";`, and finally triggers `reload(arg2)`.
 
-**对抗流程**：正则或 DOM 解析取出 202 页面内联 `arg1` → 本地执行 `unsbox` + `hexXor` → 携带 `acw_sc__v2` 重放。
+**Countermeasure flow**: use a regex or DOM parsing to pull the inline `arg1` out of the 202 page -> run `unsbox` + `hexXor` locally -> replay while carrying `acw_sc__v2`.
 
-**阿里系两套体系**（社区风控集合）：`140#` 开头加密参数 与 `227!` 开头 + `fireyejs.js`，另有控制流平坦化 / WASM / 滑块轨迹。
+**Two Alibaba-family systems** (community risk-control collection): encrypted parameters beginning with `140#`, and the `227!` prefix + `fireyejs.js`, plus control-flow flattening / WASM / slider trajectory.
 
-## 腾讯 TCaptcha（天御 / 防水墙）
+## Tencent TCaptcha (Tenyu / Waterproof Wall)
 
-### 文件清单（看雪原创分析）
+### File inventory (original Kanxue analysis)
 
-| 文件 | 大小 | 作用 | 混淆程度 |
+| File | Size | Role | Obfuscation level |
 |---|---|---|---|
-| `TCaptcha.js` | — | 入口/加载器 | 低 |
-| `tcaptcha-frame.js` | 207KB | 主框架逻辑 | 中（Webpack） |
-| `dy-ele.js` | 209KB | 滑块核心逻辑 | 中（Webpack） |
-| `tdc.js` | 78KB | 设备指纹采集 | 极高（JSVMP） |
+| `TCaptcha.js` | -- | entry point / loader | low |
+| `tcaptcha-frame.js` | 207KB | main frame logic | medium (Webpack) |
+| `dy-ele.js` | 209KB | slider core logic | medium (Webpack) |
+| `tdc.js` | 78KB | device fingerprint collection | extremely high (JSVMP) |
 
-### verify 接口参数
+### verify endpoint parameters
 
-| 参数 | 含义 |
+| Parameter | Meaning |
 |---|---|
-| `collect` | TDC 加密的设备指纹 + 轨迹数据 |
-| `tlg` | `collect` 长度 |
-| `eks` | TDC 生成的加密密钥信息 |
-| `sess` | 会话标识 |
-| `ans` | 滑块答案 JSON |
-| `pow_answer` | PoW 结果 |
-| `pow_calc_time` | PoW 耗时毫秒 |
-| `subsid` | 子会话 ID，递增 |
-| `callback` | JSONP 回调名，形如 `_aq_191730` |
+| `collect` | TDC-encrypted device fingerprint + trajectory data |
+| `tlg` | length of `collect` |
+| `eks` | encrypted key information generated by TDC |
+| `sess` | session identifier |
+| `ans` | slider answer JSON |
+| `pow_answer` | PoW result |
+| `pow_calc_time` | PoW elapsed time in milliseconds |
+| `subsid` | sub-session ID, incrementing |
+| `callback` | JSONP callback name, of the form `_aq_191730` |
 
-### JSVMP 细节
+### JSVMP details
 
-`tdc.js` 使用腾讯自研 `__TENCENT_CHAOS_STACK` / `__TENCENT_CHAOS_VM` 自定义字节码解释器，字节码以**数万个数字的大数组内联**，核心加密逻辑全部在 VM 内执行。
+`tdc.js` uses Tencent's in-house `__TENCENT_CHAOS_STACK` / `__TENCENT_CHAOS_VM` custom bytecode interpreter, with the bytecode **inlined as a huge array of tens of thousands of numbers**; all core encryption logic executes inside the VM.
 
-另有随机变量名存储 `eks`，如 `window.KcYVdONjSbHEDgmXanKNEdRPYPMTPdOh`，**每次加载变化**——使 hook 脚本不稳定。
+There is also a random variable name storing `eks`, for example `window.KcYVdONjSbHEDgmXanKNEdRPYPMTPdOh`, **which changes on every load** -- this makes hook scripts unstable.
 
-**TDC 常用调用形态**：
+**Common TDC call shapes**:
 
 ```js
 collect = decodeURIComponent(window.TDC.getData(true));
@@ -173,172 +173,172 @@ eks     = window.TDC.getInfo().info;
 window.TDC.setData({ ft: "q__7Pf__H" });
 ```
 
-**PoW**：暴力搜索 `md5(nonce + counter) === target`，返回 `ans`（counter）与 `duration`。
+**PoW**: brute-force search for `md5(nonce + counter) === target`, returning `ans` (the counter) and `duration`.
 
-**难点**：JSVMP + 随机变量名 + 数万数字字节码数组，静态分析与扣代码成本极高。
+**Difficulties**: JSVMP + random variable names + a bytecode array of tens of thousands of numbers; the cost of static analysis and code extraction is extremely high.
 
-> 腾讯云 WAF 是否存在与阿里 `acw_sc__v2` 同级别的**独立具名 JS 挑战 Cookie：未核实**。社区常把 `tdc.js`（实为 TCaptcha）与腾讯云 WAF 混为一谈，二者应分开陈述。
+> Whether Tencent Cloud WAF has an **independent named JS challenge cookie at the same level as Alibaba's `acw_sc__v2`: unverified**. The community often lumps `tdc.js` (which is actually TCaptcha) together with Tencent Cloud WAF; the two should be stated separately.
 
-## 网易易盾
+## NetEase Yidun
 
-### 设备指纹查询接口字段（官方文档）
+### Device-fingerprint query endpoint fields (official docs)
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |---|---|---|
-| `taskId` | String | 本次查询操作唯一标识 |
-| `tokenCreationTime` | Number | token 生成时间（UNIX 毫秒） |
-| `device.deviceId` | String | 设备指纹 ID |
-| `device.sdkType` | Number | 1-Web，2-Android，3-iOS，**4-小程序** |
-| `checkResult.isTampered` | Number | 上传请求是否被篡改 |
-| `checkResult.isSimulator` | Number | 是否模拟器 |
-| `checkResult.isRooted` | Number | 是否 Root/越狱 |
-| `checkResult.isMultiRun` | Number | 是否多开 |
-| `checkResult.isVpn` / `isProxy` | Number | VPN / 代理 |
-| `checkResult.isHooked` / `isInjected` / `isDebugged` | Number | hook / 注入 / 调试 |
+| `taskId` | String | unique identifier of this query operation |
+| `tokenCreationTime` | Number | token creation time (UNIX milliseconds) |
+| `device.deviceId` | String | device fingerprint ID |
+| `device.sdkType` | Number | 1-Web, 2-Android, 3-iOS, **4-mini program** |
+| `checkResult.isTampered` | Number | whether the upload request was tampered with |
+| `checkResult.isSimulator` | Number | whether it is an emulator |
+| `checkResult.isRooted` | Number | whether Root/jailbroken |
+| `checkResult.isMultiRun` | Number | whether multiple instances are running |
+| `checkResult.isVpn` / `isProxy` | Number | VPN / proxy |
+| `checkResult.isHooked` / `isInjected` / `isDebugged` | Number | hook / injection / debugging |
 | `checkResult.isXposed` | Number | Xposed |
-| `checkResult.isCloud` / `isSuspectCloud` | Number | 云手机 / 疑似云手机 |
-| `checkResult.isRiskRom` / `isVm` / `isModify` / `isModifyApp` | Number | 风险 ROM / 虚拟机 / 改机 / 改包 |
-| `checkResult.isFlash` / `isAutoTouch` / `isControlApp` / `isScript` | Number | 一键刷机 / 自动点击 / 群控 / 脚本 |
-| `checkResult.securityScore` | Number | 安全评分 |
-| `checkResult.isCydiaSubstrate` / `isM1` / `isSpeedUp` / `isAntiJailbreak` | Number | iOS 侧风险项 |
+| `checkResult.isCloud` / `isSuspectCloud` | Number | cloud phone / suspected cloud phone |
+| `checkResult.isRiskRom` / `isVm` / `isModify` / `isModifyApp` | Number | risky ROM / virtual machine / device modification / repackaging |
+| `checkResult.isFlash` / `isAutoTouch` / `isControlApp` / `isScript` | Number | one-click reflash / auto-tap / device-farm control / script |
+| `checkResult.securityScore` | Number | security score |
+| `checkResult.isCydiaSubstrate` / `isM1` / `isSpeedUp` / `isAntiJailbreak` | Number | iOS-side risk items |
 
-**注意**：官方文档标题标注该设备指纹文档为**「已下线」**，接入方式可能已迁移。此表的价值在于**反推检测维度**。
+**Note**: the official docs title marks this device-fingerprint document as **"discontinued"**, and the integration method may already have migrated. The value of this table lies in **reverse-inferring the detection dimensions**.
 
-### Web 侧参数（社区）
+### Web-side parameters (community)
 
-- 域名特征 `163`；参数 `data`、`fp`、`cb`（另有 `token`、`acToken`）
-- Cookie / 全局属性 `gdxidpyhxdE`（`window["gdxidpyhxde"]`）与 `fp` 关联：**先生成参数 → 写入 cookie → 再从 cookie 取值作为 `fp`**
-- 定位：hook `window["gdxidpyhxde"]` 的 setter
-- `data` = 加密后的滑动轨迹数组，含 `atomTraceData`（未加密轨迹）、`p`、`ext`、`m` 等字段
-- 轨迹元素三元组：`[Math.round(dragX < 0 ? 0 : dragX), Math.round(clientY - startY), now() - beginTime]`
+- Domain characteristic `163`; parameters `data`, `fp`, `cb` (also `token`, `acToken`)
+- The cookie / global property `gdxidpyhxdE` (`window["gdxidpyhxde"]`) is associated with `fp`: **generate the parameter first -> write it into the cookie -> then read the value from the cookie as `fp`**
+- Locating: hook the setter of `window["gdxidpyhxde"]`
+- `data` = the encrypted slider trajectory array, containing fields such as `atomTraceData` (unencrypted trajectory), `p`, `ext`, `m`
+- Trajectory element triple: `[Math.round(dragX < 0 ? 0 : dragX), Math.round(clientY - startY), now() - beginTime]`
 - `ext` = `f(token, mouseDownCounts + ',' + traceData.length)`
-- 服务端返回 `validate` 即验证通过
-- 参数名带版本特征，社区分析覆盖 2.19.1 / 2.27.2 / 2.28.0 / 2.28.5
-- **环境要求：JS 环境的 UA 与请求 UA 必须一致**（否则通过率显著下降）
-- 类型值：`7` = 顺序点选，`2` = 滑块
+- The server returning `validate` means verification passed
+- Parameter names carry version characteristics; community analyses cover 2.19.1 / 2.27.2 / 2.28.0 / 2.28.5
+- **Environment requirement: the UA of the JS environment must match the request UA** (otherwise the pass rate drops noticeably)
+- Type values: `7` = sequential click-select, `2` = slider
 
-## 数美 shumei
+## Shumei
 
-### v4 设备 ID 生成
+### v4 device ID generation
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| 入口文件 | `fp.min.js`（经 ob 混淆） |
-| 请求参数 | `organization`（数美产品唯一标识）、`data`、`ep` |
-| `ep` | `rsaEncrypt(uuid, publicKey)`；`publicKey` 由 `api.js` 返回；`uuid` 由 `getUid` 生成（标准 UUID v4 形态） |
-| `data` | **gzip 压缩后的明文数据**，再用 **AES-CBC** 加密：key = `priId`，**iv 固定为 `0102030405060708`** |
-| `priId` | 对生成 `ep` 时传入的 uuid 参数**截取**后做标准 **MD5** |
-| 明文内容 | 浏览器环境、加密参数等；`smid` 由 `getLocalsmid()` 返回；`MD5_Encrypt` 为标准 MD5（`'smsk_web_' + ...` 形态） |
-| `Protocol` | 携带动态 DES key |
-| `deviceId` 形态 | 由 v4 接口返回内容前拼接 `"B"` 得到 |
-| Cookie | `smidV2` / `smDeviceId`，另有 `shumeiBlockBox` |
+| Entry file | `fp.min.js` (obfuscated with ob) |
+| Request parameters | `organization` (unique identifier of the Shumei product), `data`, `ep` |
+| `ep` | `rsaEncrypt(uuid, publicKey)`; `publicKey` is returned by `api.js`; `uuid` is generated by `getUid` (standard UUID v4 form) |
+| `data` | **the plaintext data after gzip compression**, then encrypted with **AES-CBC**: key = `priId`, **iv fixed at `0102030405060708`** |
+| `priId` | **truncate** the uuid parameter passed in when generating `ep`, then apply standard **MD5** |
+| plaintext content | browser environment, encryption parameters, etc.; `smid` is returned by `getLocalsmid()`; `MD5_Encrypt` is standard MD5 (`'smsk_web_' + ...` form) |
+| `Protocol` | carries a dynamic DES key |
+| `deviceId` form | obtained by prefixing the content returned by the v4 endpoint with `"B"` |
+| Cookie | `smidV2` / `smDeviceId`, plus `shumeiBlockBox` |
 
-### 滑块
+### Slider
 
-- 接口 `register`（获取图片与加密信息）、`fverify`（验证，v2 路径 `/v2/fverify`）
-- `organization` 为加密字段
-- `rid` 由 `register` 传递，实际变化参数约三位，主要随**滑动距离、滑动时间、滑动轨迹**变化
-- 加密算法涉及 **DES-ECB + Zero Padding + Base64**
-- `captchaUuid` = `generateTimeFormat()` + 16 位随机
-- box 相关：`boxId` 以 `'B'` 开头、89 字符；`boxData` 以 `'D'` 开头、约 8K
+- Endpoints `register` (fetch the image and encryption information), `fverify` (verification; the v2 path is `/v2/fverify`)
+- `organization` is an encrypted field
+- `rid` is passed in by `register`; the parameters that actually vary number about three, and change mainly with **slide distance, slide time, slide trajectory**
+- The encryption algorithm involves **DES-ECB + Zero Padding + Base64**
+- `captchaUuid` = `generateTimeFormat()` + 16 random characters
+- box-related: `boxId` starts with `'B'` and is 89 characters; `boxData` starts with `'D'` and is about 8K
 
-### 官方产品能力（用于理解检测面）
+### Official product capabilities (for understanding the detection surface)
 
-设备指纹声称能力：设备唯一标识、虚假设备识别、机器操控设备标签、设备可疑标签（可识别 Root、无 SIM 卡、VPN、设备重置等二十余种）、设备属性标签（50+ 维度）。**风险环境识别**明确包含：检测代理服务器、**设备调试状态与运行环境**、高危软件，识别设备农场、多开 APP 等。
+Device fingerprint claimed capabilities: unique device identifier, fake-device detection, machine-operated device tags, suspicious-device tags (able to identify Root, no SIM card, VPN, device reset and twenty-odd other conditions), device attribute tags (50+ dimensions). **Risk environment detection** explicitly includes: detecting proxy servers, **device debugging state and runtime environment**, high-risk software, and identifying device farms, multi-instance apps, and so on.
 
-> 厂商宣称的「重码率低至万分之一」「适配 3.2 万+ 型号」等为营销数据，未经独立核实。
+> Vendor claims such as "duplicate rate as low as one in ten thousand" and "compatible with 32,000+ models" are marketing data and have not been independently verified.
 
-## 顶象 dingxiang
+## Dingxiang
 
-### 官方可核实内容
+### Officially verifiable content
 
-- 产品名「智能无感验证」
-- SDK 类 `DXCaptchaView` / `DXCaptchaViewV5`；监听器 `DXCaptchaListener` / `DXCaptchaEvent`
-- 验证成功回调返回 `token`（用于后端校验）
-- **若 token 以 `sl` 开头，则为前端网络不通生成的降级 token**
-- 参数：`constID_js` / `constIDServer` / `constID_options`（Android/iOS SDK 内无需配置）、`captchaJS`、`keyURL`、`corsBaseURL`（v5.1.3r+）
-- 事件：`success` / `fail` / `onCaptchaJsLoaded`（v5.1.7r+）/ `onCaptchaJsLoadFail`
-- 设备指纹模块类名 `DXRiskManager`（`ConstID` 模块），另有 `hardId` 概念
+- Product name "Intelligent Passive Verification"
+- SDK classes `DXCaptchaView` / `DXCaptchaViewV5`; listeners `DXCaptchaListener` / `DXCaptchaEvent`
+- The success callback returns a `token` (used for backend validation)
+- **If the token starts with `sl`, it is a degraded token generated because the frontend network is unreachable**
+- Parameters: `constID_js` / `constIDServer` / `constID_options` (no configuration needed inside the Android/iOS SDK), `captchaJS`, `keyURL`, `corsBaseURL` (v5.1.3r+)
+- Events: `success` / `fail` / `onCaptchaJsLoaded` (v5.1.7r+) / `onCaptchaJsLoadFail`
+- Device-fingerprint module class name `DXRiskManager` (the `ConstID` module), plus a `hardId` concept
 
-### 请求链与参数（社区，2019–2021 分析，可能过时）
+### Request chain and parameters (community, 2019-2021 analyses, possibly outdated)
 
-| 步骤 | 接口 | 产出 |
+| Step | Endpoint | Output |
 |---|---|---|
-| 1 | `c1` | `c` 参数（用于计算设备指纹） |
-| 2 | `a` | 图片与 `token2`；返回 `sid`、`y`、`p1`/`p2`/`p3`（乱序拼图 webp 路径） |
+| 1 | `c1` | the `c` parameter (used to compute the device fingerprint) |
+| 2 | `a` | image and `token2`; returns `sid`, `y`, `p1`/`p2`/`p3` (scrambled jigsaw webp paths) |
 | 3 | `v1` | `token3` |
 
-参数表：`ak`（AppId 关联固定值）、`ac`（加密参数，形如 `492#X8Xn8AQv/Y6pdvgYXXfOuMffR/...`）、`aid`（时间戳 + 随机数 + 1，推测 nonce）、`jsv`（版本号，如 `1.3.11.98`）、`sid`、`de`、`wp`、`s`/`h`/`w`、`_r`、`x`/`y`。
+Parameter table: `ak` (fixed value associated with the AppId), `ac` (encrypted parameter, of the form `492#X8Xn8AQv/Y6pdvgYXXfOuMffR/...`), `aid` (timestamp + random number + 1, presumed nonce), `jsv` (version number, e.g. `1.3.11.98`), `sid`, `de`, `wp`, `s`/`h`/`w`, `_r`, `x`/`y`.
 
-指纹存储在 cookie、Session Storage、Local Storage **多处**。
+The fingerprint is stored in **multiple places**: cookie, Session Storage, Local Storage.
 
-失败响应示例：`{"data":"f8839e00435f2e05f9ed60b3d3c5498554cb367655ec6e7318adefda150437040a74963c","msg":"lid invalid","status":-4}`
+Failure response example: `{"data":"f8839e00435f2e05f9ed60b3d3c5498554cb367655ec6e7318adefda150437040a74963c","msg":"lid invalid","status":-4}`
 
-> 顶象错误码 `-10001` ~ `-10007`：**未核实**。
+> Dingxiang error codes `-10001` ~ `-10007`: **unverified**.
 
-## 同盾
+## Tongdun
 
-### 无感（设备指纹）
+### Passive (device fingerprint)
 
-- 文件 `fm.js`，参数 **`blackbox`**
-- 参数名体系 `a`/`b`/`c`/`d`… 或 `h`/`i`/`j`/`k`…
-- **`blackbox` 位置历史上在 payload，后迁移到 headers**
-- 全局配置对象 `window._fmOpt`（含 `token`、`partner`、`appName`）
-- `oO0QQo.mfaId`（可能为 `undefined`）
+- File `fm.js`, parameter **`blackbox`**
+- Parameter-name systems `a`/`b`/`c`/`d`... or `h`/`i`/`j`/`k`...
+- **Historically the `blackbox` location was in the payload, and it later migrated to headers**
+- Global config object `window._fmOpt` (containing `token`, `partner`, `appName`)
+- `oO0QQo.mfaId` (possibly `undefined`)
 
-### 滑块 `p1` ~ `p9`（v2）
+### Slider `p1` ~ `p9` (v2)
 
-| 参数 | 构造 |
+| Parameter | Construction |
 |---|---|
-| `p1` | `blackBox`（`QQoooQ.blackBox`，也可暂时写死） |
+| `p1` | `blackBox` (`QQoooQ.blackBox`; may also be temporarily hardcoded) |
 | `p2` | `blackBox + ^^1^^1^^1` |
-| `p3` | `MD5(...)`（常数特征明显，标准 MD5） |
-| 其他 | `window._fmOpt.token` / `.partner` / `.appName` / `oO0QQo.mfaId` 参与构造 |
+| `p3` | `MD5(...)` (constant features are obvious, standard MD5) |
+| others | `window._fmOpt.token` / `.partner` / `.appName` / `oO0QQo.mfaId` participate in the construction |
 
-加密涉及 **AES**（iv 形如 `Moa14C2uXpe8AUJ5`）与 **DES3**。
+The encryption involves **AES** (iv of the form `Moa14C2uXpe8AUJ5`) and **DES3**.
 
-**图片接口与验证接口为同一接口，仅请求参数不同。** 验证结果字段：`needValidateCode`、`validateToken`。
+**The image endpoint and the verification endpoint are the same endpoint, differing only in request parameters.** Verification result fields: `needValidateCode`, `validateToken`.
 
-**重要提示**：社区明确指出「这个分析只是同盾其中一份算法，**它不止一份算法**」——同盾存在多套并行算法，不可假定单一实现。
+**Important note**: the community explicitly points out that "this analysis is only one of Tongdun's algorithms -- **it has more than one**" -- Tongdun has multiple parallel algorithms, so you must not assume a single implementation.
 
-### TrustDecision（同盾出海品牌）
+### TrustDecision (Tongdun's overseas brand)
 
-提供轻量级 JS 与移动端 SDK，声称输出 70+ 项设备风险标签，支持 Web/iOS/Android/小程序。
+Provides a lightweight JS and mobile SDK, claiming to output 70+ device risk labels and to support Web/iOS/Android/mini programs.
 
-> 同盾官方 Web SDK 完整字段清单：**未核实**。
+> The complete field list of Tongdun's official Web SDK: **unverified**.
 
-## 横向对比
+## Cross-vendor comparison
 
-| 厂商 | 加密算法特征 | 固定值/常量 | 主要难点 |
+| Vendor | Encryption algorithm characteristics | Fixed values/constants | Main difficulty |
 |---|---|---|---|
-| 阿里 | 自定义异或 + 40 字节置换表 | `3000176000856006061501533003690027800375` | 内联 arg1 动态变化 + 反自动化死循环 |
-| 极验三代 | AES + RSA 拼接，三个 w 关联 | 点选类 iv = 全零 | 三 w 强关联 |
-| 极验四代 | AES-CBC + RSA + PoW | — | PoW 碰撞 + JSONP 动态解析 |
-| 腾讯 | 自研 JSVMP 字节码 | — | 数万数字字节码数组 + 随机变量名 |
-| 易盾 | 未完全公开 | `gdxidpyhxdE` cookie 名 | 参数版本杂 + UA 一致性要求 |
-| 数美 | AES-CBC（gzip 预处理）+ RSA + MD5 | iv = `0102030405060708` | 相对最低 |
-| 顶象 | 自定义（`ac` 形如 `492#...`） | — | 环境校验维度多 |
-| 同盾 | AES + DES3 + MD5 | iv 形如 `Moa14C2uXpe8AUJ5` | 多套并行算法 |
+| Alibaba | custom XOR + 40-byte permutation table | `3000176000856006061501533003690027800375` | inline arg1 changes dynamically + anti-automation infinite loop |
+| GeeTest generation 3 | AES + RSA concatenation, three linked w values | click-select iv = all zeros | strong linkage of the three w values |
+| GeeTest generation 4 | AES-CBC + RSA + PoW | -- | PoW collision + dynamic JSONP parsing |
+| Tencent | in-house JSVMP bytecode | -- | bytecode array of tens of thousands of numbers + random variable names |
+| Yidun | not fully public | `gdxidpyhxdE` cookie name | mixed parameter versions + UA consistency requirement |
+| Shumei | AES-CBC (gzip preprocessing) + RSA + MD5 | iv = `0102030405060708` | relatively the lowest |
+| Dingxiang | custom (`ac` of the form `492#...`) | -- | many environment-verification dimensions |
+| Tongdun | AES + DES3 + MD5 | iv of the form `Moa14C2uXpe8AUJ5` | multiple parallel algorithms |
 
-## 来源
+## Sources
 
-- 极验三代全链：https://www.cnblogs.com/ikdl/p/17001212.html
-- 极验三代三 w 关联：https://cloud.tencent.com/developer/article/2383906
-- 极验三/四代点选与 AES iv：https://www.cnblogs.com/ikdl/p/17272966.html
-- 极验四代 w = AES+RSA + PoW：https://blog.csdn.net/weixin_42384784/article/details/160193114
-- 极验 GeeGuard 集成指南：https://docs.geetest.com/guard/quick_integration_guide
-- 极验隐私政策（采集面）：https://www.geetest.com/Private
-- 阿里云合规声明（Cookie 植入场景）：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions
-- 阿里 WAF 3.0 防护对象设置：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups
-- `acw_sc__v2` 完整实现：https://www.cnblogs.com/wyh0923/p/16590583.html
-- 腾讯 TCaptcha 文件清单与 JSVMP：https://bbs.kanxue.com/thread-290429.htm
-- 腾讯纯协议还原研究：https://github.com/decodecaptcha/TencentCaptchaBreak
-- 易盾设备指纹字段表：https://support.dun.163.com/documents/609099986339037184?docId=624010587874123776
-- 数美 v4 设备 ID：https://cloud.tencent.com/developer/article/2475504
-- 数美滑块：https://hyb.life/archives/209
-- 顶象 SDK 文档：https://www.dingxiang-inc.com/docs/detail/captcha
-- 顶象 ConstID：https://www.dingxiang-inc.com/docs/detail/const-id
-- 顶象请求链分析：https://www.cnblogs.com/boycelee/p/14270112.html
-- 同盾 BlackBox：https://1997.pro/archives/1706068432055
-- 同盾 v2 滑块 p1~p9：https://cloud.tencent.com/developer/article/2501583
-- 社区风控集合：https://1997.pro/archives/1713518394359
+- GeeTest generation 3 full chain: https://www.cnblogs.com/ikdl/p/17001212.html
+- GeeTest generation 3 three linked w values: https://cloud.tencent.com/developer/article/2383906
+- GeeTest generation 3/4 click-select and AES iv: https://www.cnblogs.com/ikdl/p/17272966.html
+- GeeTest generation 4 w = AES+RSA + PoW: https://blog.csdn.net/weixin_42384784/article/details/160193114
+- GeeTest GeeGuard integration guide: https://docs.geetest.com/guard/quick_integration_guide
+- GeeTest privacy policy (collection surface): https://www.geetest.com/Private
+- Aliyun compliance statement (cookie injection scenarios): https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions
+- Aliyun WAF 3.0 protected-object settings: https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups
+- Full `acw_sc__v2` implementation: https://www.cnblogs.com/wyh0923/p/16590583.html
+- Tencent TCaptcha file inventory and JSVMP: https://bbs.kanxue.com/thread-290429.htm
+- Tencent pure-protocol restoration research: https://github.com/decodecaptcha/TencentCaptchaBreak
+- Yidun device-fingerprint field table: https://support.dun.163.com/documents/609099986339037184?docId=624010587874123776
+- Shumei v4 device ID: https://cloud.tencent.com/developer/article/2475504
+- Shumei slider: https://hyb.life/archives/209
+- Dingxiang SDK docs: https://www.dingxiang-inc.com/docs/detail/captcha
+- Dingxiang ConstID: https://www.dingxiang-inc.com/docs/detail/const-id
+- Dingxiang request-chain analysis: https://www.cnblogs.com/boycelee/p/14270112.html
+- Tongdun BlackBox: https://1997.pro/archives/1706068432055
+- Tongdun v2 slider p1~p9: https://cloud.tencent.com/developer/article/2501583
+- Community risk-control collection: https://1997.pro/archives/1713518394359

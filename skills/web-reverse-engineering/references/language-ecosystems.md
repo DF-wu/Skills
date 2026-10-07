@@ -112,7 +112,7 @@ burden. Pick by success rate and maintenance activity, not by knob count.
 1. `gmssl` and `gmssl-python` are different packages with the same import name (`gmssl`).
    The ctypes one needs the native library; the pure-Python one does not. Check which you
    have before debugging a load error.
-2. **`pip install pysmx` does not install a 国密 library.** The PyPI package `pysmx` is a
+2. **`pip install pysmx` does not install a Chinese-national-crypto (SM) library.** The PyPI package `pysmx` is a
    **SourceMod plugin tool** ("Interact with SourceMod plug-ins"). The library people mean
    when they say "pysmx" is published as **`snowland-smx`** — its *import* name happens to
    be `pysmx` (`from pysmx.SM2 import ...`), which is where the confusion comes from. Any
@@ -227,7 +227,7 @@ Rust has become a genuine option for this work, primarily because of `wreq`.
 | **boring** | crates.io | BoringSSL bindings — low-level TLS control | Active |
 | **rquickjs** | crates.io | High-level QuickJS bindings; ES2020+, async bridging to Rust | Active |
 | **tokio-tungstenite** | crates.io | WebSocket | Active |
-| **sm2 / sm3 / sm4** | crates.io | 国密 algorithms (RustCrypto) | Active |
+| **sm2 / sm3 / sm4** | crates.io | Chinese national crypto algorithms (RustCrypto) | Active |
 
 **There is no `rustls-tls` crate.** A crates.io search returns dependency names, not a
 package. If you see it referenced as a Rust fingerprinting library, that is a
@@ -272,7 +272,7 @@ significant project of its own.
 | **Playwright (Java)** | Maven | Browser automation with the Playwright API |
 | **OkHttp** | Maven | HTTP client |
 | **Apache HttpClient** | Maven | HTTP client |
-| **BouncyCastle (bcprov, bcpkix)** | Maven | Crypto. **1.86 confirmed to include `SM2Engine`, `SM3Digest`, `SM4Engine`, `SM9Engine`, `SM2Signer`**, plus JCA registration for SM3/SM4 — a genuinely complete 国密 implementation. |
+| **BouncyCastle (bcprov, bcpkix)** | Maven | Crypto. **1.86 confirmed to include `SM2Engine`, `SM3Digest`, `SM4Engine`, `SM9Engine`, `SM2Signer`**, plus JCA registration for SM3/SM4 — a genuinely complete Chinese-national-crypto implementation. |
 | **Netty** | Maven | Async networking; if you must build a custom TLS stack, this is the base |
 | **CFR / Vineflower / Procyon** | JAR | Java decompilers — see [`software-reverse-engineering.md`](software-reverse-engineering.md) |
 | **Recaf** | JAR | Interactive bytecode editor |
@@ -295,7 +295,7 @@ Same constraint as the JVM: no mature ClientHello-shaping client.
 | **Playwright (.NET)** | NuGet | Browser automation |
 | **PuppeteerSharp** | NuGet | CDP automation |
 | **HttpClient** | Built-in | HTTP |
-| **BouncyCastle.Cryptography** | NuGet | Crypto. **bc-csharp 2.7.0 confirmed to include `SM2Engine`, `SM3Digest`, `SM4Engine`, `SM9Engine`, `SM2Signer`** — the 国密 story on .NET is complete. |
+| **BouncyCastle.Cryptography** | NuGet | Crypto. **bc-csharp 2.7.0 confirmed to include `SM2Engine`, `SM3Digest`, `SM4Engine`, `SM9Engine`, `SM2Signer`** — the Chinese-national-crypto story on .NET is complete. |
 | **Loxifi.CurlImpersonate** / **CurlImpersonate** | NuGet | TLS impersonation wrappers — **small, experimental projects**. Treat as proof-of-concept, not infrastructure. |
 | **dnSpyEx** | GitHub | .NET decompiler/debugger/editor — the primary .NET RE tool |
 | **ILSpy** | GitHub | .NET decompiler |
@@ -361,7 +361,7 @@ support and performance.
 | **Jint** | C# | ES2020+ | The .NET option |
 | **Hermes** | C++ | ES6-ish | React Native's engine; bytecode is a RE target (see `hbctool`, version-limited to HBC 59/62/74/76) |
 
-**For 补环境 (environment simulation) work**, QuickJS is usually the right choice: small,
+**For environment simulation (bu-huanjing) work**, QuickJS is usually the right choice: small,
 ES2023-complete, easy to embed, and its global object is straightforward to shape. V8 is
 heavier but is what the target actually runs, so behavioural differences are smaller.
 
@@ -399,12 +399,12 @@ stars and no release. Use it if your team lives in Ruby and your target does not
 fingerprint TLS.
 
 **PHP**: `Guzzle` for HTTP, various headless-Chrome wrappers. TLS impersonation is limited
-to small projects. The 国密 story is better than the impersonation story: **`pohoc/crypto-sm`**
+to small projects. The Chinese-national-crypto story is better than the impersonation story: **`pohoc/crypto-sm`**
 (pure PHP) and **`appla/php-ext-gmsm`** (a PHP 8.3+ C extension built on OpenSSL) both
 exist and are maintained.
 
 **Swift**: **there is a hard gap here.** A search for Swift TLS-fingerprint impersonation
-work returns nothing, and there is **no maintained Swift 国密 library** (SM2/SM3/SM4
+work returns nothing, and there is **no maintained Swift Chinese-national-crypto library** (SM2/SM3/SM4
 appears only as 2018-era personal demos). Swift is usable for Apple-platform automation
 (WebDriverAgent, `idb`) and for WASM (`swiftwasm/WasmKit`) — not as a client language for a
 TLS-fingerprinting target.
@@ -454,7 +454,7 @@ Two secondary questions that often decide it:
 
 1. **Do you need to execute the target's JavaScript?** If yes, JS-native (Node) or an
    embeddable engine (QuickJS, goja, rquickjs) is a large advantage. Running vendor JS in
-   a QuickJS context is the core of 补环境 work — see
+   a QuickJS context is the core of environment-simulation (bu-huanjing) work — see
    [`environment-simulation-jsvmp.md`](environment-simulation-jsvmp.md).
 2. **Is this a one-off or a production system?** For a one-off, use whatever you know. For
    production, the maintenance burden of an impersonation client is real and version-
@@ -470,43 +470,3 @@ Two secondary questions that often decide it:
 - Environment simulation: [`environment-simulation-jsvmp.md`](environment-simulation-jsvmp.md)
 - Binary RE tooling per platform: [`software-reverse-engineering.md`](software-reverse-engineering.md)
 - Chinese national crypto standards: [`signature-parameter-re.md`](signature-parameter-re.md)
-
----
-
-## 中文摘要
-
-**先说结论**：这个技能文档以 Python 为主，是因为生态确实在 Python，不是因为你必须用 Python。但有一个约束会替你决定语言：**如果目标对 TLS 做指纹识别，成熟选择只有 Python / Node / Go / Rust / C**；JVM 有社区级方案；其他语言只能跑浏览器或挂 sidecar。
-
-**成熟度分层（按实际 registry 状态核对）**：
-- **成熟**：Python（`curl_cffi`）/ Node（`impit`）/ Go（`bogdanfinn/tls-client` + `utls`）/ Rust（`wreq`）/ C（`lexiforest/curl-impersonate`）
-- **社区级**：JVM（`com.github.zhkl0228:impersonator` 1.10.2，做 JA3/JA4 + HTTP/2 + HTTP/3，但项目很小，生产可靠性**未核实**）
-- **极不成熟**：.NET（只有 curl-impersonate 的小型包装）/ PHP / Ruby（`ruby-curl-impersonate` 零 star 无 release）
-- **完全空白**：**Swift**——搜 Swift TLS 指纹仿真返回 0 结果，且**无维护中的 Swift 国密库**（SM2/SM3/SM4 只有 2018 年个人 Demo）
-- **必须 sidecar**：Elixir/Erlang、Lua
-
-**五条必须纠正的常见错误**：
-1. **`rquest` 已死**——crates.io 上**所有版本均已 yank**（最后 5.2.0 / 2025-07-11）。Rust 侧请用 `wreq`。
-2. **`rustls-tls` crate 不存在**——crates.io 搜到的只是依赖名，不是包。
-3. **`curl-impersonate` 已迁移**——原仓库 `lwthiker` 停在 v0.6.1（2024-03-02），实际维护在 **`lexiforest/curl-impersonate`**（v2.2.3 / 2026-09，已并入 curl 8.22.0，含 HTTP/3 与 Android/iOS/Windows/LoongArch/RISC-V 预编译）。
-4. **`pip install pysmx` 装不到国密库**——PyPI 上的 `pysmx` 是 **SourceMod 插件工具**。真正要装的是 **`snowland-smx`**（1.1.0），只是它的 **import 名恰好是 `pysmx`**，混淆由此而来。
-5. **HtmlUnit 的 groupId 陷阱**——`org.htmlunit:htmlunit` 是现行线（5.5.0 / 2026-08），`net.sourceforge.htmlunit:htmlunit` 冻结在 2.70.0（2023-01），两者都能解析，可能静默拉到旧版。
-
-**Python 侧的停更清单（带日期）**：`undetected-chromedriver` 3.5.5（2024-02-17，被 nodriver 取代）、`hrequests` 0.9.2（2024-12-01）、PyPI `tls-client` 1.0.1（2024-02-02，替代是 `python-tls-client`）、`rnet`（GitHub 仓库 API 返回 404 且 14 个月无发版）。`go-rod` 已 27 个月无 release，Go 侧改用 `chromedp` / `playwright-go`。Go 的 WASM 绑定 `wasmer-go`（2021）与 `wasmtime-go`（2022）均已停滞，改用 **Wazero**。国密 Go 库用 **`emmansun/gmsm`**，不用 2021 年停更的 `tjfoc/gmsm`。
-
-**国密覆盖（源码级已确认）**：BouncyCastle Java 1.86 与 bc-csharp 2.7.0 均含 `SM2Engine`/`SM3Digest`/`SM4Engine`/`SM9Engine`/`SM2Signer`（bc-java 另有 JCA 注册）；Go 用 `emmansun/gmsm`；Rust 用 RustCrypto 的 `sm2`/`sm3`/`sm4`；PHP 有 `pohoc/crypto-sm`（纯 PHP）与 `appla/php-ext-gmsm`（PHP 8.3+ C 扩展）。
-
-**浏览器自动化的当前状态（重要）**：
-- **`undetected-chromedriver` 已死**（2024-02-17），后继者是同作者的 **nodriver**（直连 CDP WebSocket，无 Playwright 垫片、无 `Runtime.enable` 序列）。
-- **`rebrowser-playwright` 实质停止维护**（最后 release 1.52.0 / 2025-05-09，最后真实代码提交 2024-09），不要在新项目上用。`rebrowser-puppeteer` 的维护情况好于 Playwright 变体。
-- **Patchright** 活跃；**Camoufox** 在 **C++ 引擎层**做指纹伪装而非 JS 覆盖（最慢、对硬指纹目标最强）；**SeleniumBase UC mode** 适合过 Cloudflare/CAPTCHA 插页；**DrissionPage** 纯 Python、直连 CDP，其隐蔽性来自"不加明显的自动化标记"，**并不伪造 TLS/canvas/WebGL**。
-- **诚实结论：所有开源隐蔽浏览器最终都会泄漏，每次浏览器发版都需要重新打补丁。**选型就是选维护负担。
-
-**可嵌入 JS 引擎**：QuickJS（C，ES2023，常用选择）、QuickJS-NG（活跃分支，`rquickjs` 与 `wasm-rquickjs` 的基础）、**goja**（纯 Go，无 CGo，比 QuickJS 慢）、QJS（QuickJS 编译为 WASM 跑在 Wazero 上，CGo-free 且默认隔离文件系统与网络）、`rquickjs`（Rust）、Boa（纯 Rust，接近完整 ES2025）、Duktape/mujs（小但老旧）、Jint（.NET）、Hermes（React Native，字节码本身是逆向目标）。
-
-**补环境选型**：QuickJS 通常是正确选择——小、ES2023 完整、易嵌入、全局对象易于塑形。V8 更重但目标实际跑的就是它，行为差异更小。
-
-**性能警告**：工作量证明类挑战要在宿主语言（原生代码）里算，不要在嵌入的 JS 引擎里算——差约两个数量级。
-
-**WASM 运行时**：wasmtime、wasmer、wasm3、Wazero（纯 Go）、**wasm2c（转成 C 再用真实 C 编译器编译，常常比专用运行时更快且产出可读 C）**。**WABT 注意：`wasm-decompile` 已于 2026-06-22 从 WABT 移除**（PR #2769，1.0.42），依赖它的项目需 pin ≤1.0.41。
-
-**选型决策**：目标是否对 TLS 指纹识别？是 → Python（最快路径）/ Node（需要原生 JS）/ Go（需要静态二进制或高并发）/ Rust（需要细粒度控制）/ C（要自己造基础设施）；JVM 可试社区库但需自行验证；.NET/PHP/Ruby/Swift 走 sidecar。否 → 任何有像样 HTTP 客户端与解析器的语言，按团队熟悉度选。两个常见的决定性次问：**是否需要执行目标的 JS**（是则 JS 原生或嵌入引擎优势巨大）与**这是一次性还是生产系统**（生产的指纹客户端维护成本是真实的且对版本敏感，务必 pin 依赖）。

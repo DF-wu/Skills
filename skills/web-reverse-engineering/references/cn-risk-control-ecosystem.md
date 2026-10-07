@@ -1,188 +1,188 @@
-# 中文风控生态总览（China Risk-Control Landscape）
+# China Risk-Control Landscape Overview
 
-中文互联网的风控强度普遍高于欧美同类站点，且形态不同：欧美以 TLS/指纹为主，中文站点以**动态脚本 + 设备指纹 + 参数签名**三层组合为主。理解这个生态是选择正确路线的第一步。
+Risk-control strength on the Chinese internet is generally higher than on comparable European and American sites, and its shape differs: European and American sites rely mainly on TLS/fingerprinting, whereas Chinese sites rely mainly on a three-layer combination of **dynamic scripts + device fingerprints + parameter signing**. Understanding this ecosystem is the first step in choosing the right route.
 
-## 厂商矩阵
+## Vendor matrix
 
-| 厂商 | 产品/标识 | 核心机制 | 社区标注难点 | 可核实特征 |
+| Vendor | Product/identifier | Core mechanism | Community-flagged difficulty | Verifiable characteristics |
 |---|---|---|---|---|
-| **瑞数 RiverSecurity** | Botgate | 动态封装/验证/混淆/令牌，VM + eval | 控制流平坦化、WASM、滑块轨迹、并发环境 | `FSSBBIl1UgzbN7N80S`；202/412 状态码（见 `ruishu-river-security.md`） |
-| **阿里云盾 / 阿里 WAF** | ESA / WAF 3.0 | Cookie 会话跟踪 + JS 挑战 + 滑块 | 控制流平坦化、WASM、滑块轨迹 | `acw_tc`、`cdn_sec_tc`、`acw_sc__v2`、`acw_sc__v3`、`ssxmod_itna*`、`140#` 开头参数、`227!` 开头 + `fireyejs.js` |
-| **腾讯** | TCaptcha（天御/防水墙） | JSVMP 设备指纹 + PoW | jsvmp、动态 JS、并发 IP 要求、AIGC 图库 | `tdc.js`、`collect`、`eks`、`ans`、`pow_answer`、`__TENCENT_CHAOS_VM` |
-| **网易易盾** | NECaptcha / 风控 SDK | 设备指纹 + 行为轨迹 | 参数杂、并发环境 | `163` 域名、`data`、`fp`、`cb`、`gdxidpyhxdE` |
-| **数美 shumei** | 天网 / 设备指纹 | 设备指纹 + 内容风控 | 无（社区认为最易） | `fverify` 请求、`organization`、`smidV2`、`smDeviceId`、`shumeiBlockBox` |
-| **顶象 dingxiang** | 智能无感验证 / ConstID | 动态 JS + 环境校验 | 动态 JS、检验环境多、验证码类型多 | `ac` 加密参数、`ak`、`DXCaptcha`、`DXRiskManager` |
-| **同盾** | 设备指纹 / tdCaptcha | Blackbox 指纹 + 滑块 | 动态 JS | `fm.js` + `blackbox`；`tdCaptcha.js` + `p1`~`p9` |
-| **极验 GeeTest** | Sensebot / GeeGuard | 轨迹 + 指纹 + PoW | 无 | `geetest` 标识及域名（见 `captcha-vendors-cn.md`） |
-| **vaptcha** | — | 手势识别 | 手势识别 | `vaptcha-sdk.js` |
+| **RiverSecurity (Ruishu)** | Botgate | dynamic wrapping/verification/obfuscation/tokens, VM + eval | control-flow flattening, WASM, slider trajectory, concurrent environments | `FSSBBIl1UgzbN7N80S`; 202/412 status codes (see `ruishu-river-security.md`) |
+| **Aliyun Cloud Shield / Aliyun WAF** | ESA / WAF 3.0 | cookie session tracking + JS challenge + slider | control-flow flattening, WASM, slider trajectory | `acw_tc`, `cdn_sec_tc`, `acw_sc__v2`, `acw_sc__v3`, `ssxmod_itna*`, parameters beginning with `140#`, `227!` prefix + `fireyejs.js` |
+| **Tencent** | TCaptcha (Tenyu/Waterproof Wall) | JSVMP device fingerprint + PoW | jsvmp, dynamic JS, concurrent IP requirements, AIGC image library | `tdc.js`, `collect`, `eks`, `ans`, `pow_answer`, `__TENCENT_CHAOS_VM` |
+| **NetEase Yidun** | NECaptcha / risk-control SDK | device fingerprint + behavioral trajectory | mixed parameters, concurrent environments | `163` domain, `data`, `fp`, `cb`, `gdxidpyhxdE` |
+| **Shumei** | Tianwang / device fingerprint | device fingerprint + content risk control | none (the community considers it the easiest) | `fverify` request, `organization`, `smidV2`, `smDeviceId`, `shumeiBlockBox` |
+| **Dingxiang** | Intelligent Passive Verification / ConstID | dynamic JS + environment verification | dynamic JS, many verification environments, many CAPTCHA types | `ac` encrypted parameter, `ak`, `DXCaptcha`, `DXRiskManager` |
+| **Tongdun** | device fingerprint / tdCaptcha | Blackbox fingerprint + slider | dynamic JS | `fm.js` + `blackbox`; `tdCaptcha.js` + `p1`~`p9` |
+| **GeeTest (Jiyan)** | Sensebot / GeeGuard | trajectory + fingerprint + PoW | none | `geetest` identifier and domains (see `captcha-vendors-cn.md`) |
+| **vaptcha** | -- | gesture recognition | gesture recognition | `vaptcha-sdk.js` |
 
-> 难点列为社区口径（来源：https://1997.pro/archives/1713518394359），非官方评级，仅作工作量预估参考。
+> The difficulty column is the community's own wording (source: https://1997.pro/archives/1713518394359); it is not an official rating and serves only as a rough workload estimate.
 
-### 阿里云：三种植入场景（官方文档可核实）
+### Aliyun: three injection scenarios (verifiable from official docs)
 
-阿里的合规声明把 Cookie 植入分成三种**互不重叠的场景**，这比记 cookie 名有用得多——它告诉你**为什么**这个 cookie 会出现：
+Aliyun's compliance statement splits cookie injection into three **mutually non-overlapping scenarios**, which is far more useful than memorizing cookie names -- it tells you **why** a given cookie appears:
 
-| 场景 | 触发条件 | 植入的 Cookie | 用途 |
+| Scenario | Trigger condition | Injected cookie | Purpose |
 |---|---|---|---|
-| **一** | 使用 CC 防护/扫描防护，且请求 Cookie 中**不含** `acw_tc` | `acw_tc`、`cdn_sec_tc` | 区分统计不同客户端，配合「统计对象为 session」的扫描防护与自定义频率规则判断 CC 攻击 |
-| **二** | 站点配置 Bot 管理高级模式并开启自动集成 Web SDK | `ssxmod_itna`、`ssxmod_itna2`、`ssxmod_itna3` | 采集指纹（含 HTTP 报文 `host` 字段、浏览器高度宽度等） |
-| **三** | WAF 自定义规则或 Bot 管理规则动作开启 JS 校验/滑块 | **JS 校验通过** → `acw_sc__v2`；**滑块通过** → `acw_sc__v3` | 验证通过凭证 |
+| **One** | CC protection / scan protection is in use and the request cookie **does not contain** `acw_tc` | `acw_tc`, `cdn_sec_tc` | distinguish and count different clients; together with the scan protection and custom frequency rules whose "statistical object is session", determine CC attacks |
+| **Two** | the site configures Bot management advanced mode and enables automatic Web SDK integration | `ssxmod_itna`, `ssxmod_itna2`, `ssxmod_itna3` | collect fingerprints (including the HTTP message `host` field, browser height/width, etc.) |
+| **Three** | a WAF custom rule or Bot management rule action enables JS verification/slider | **JS verification passed** -> `acw_sc__v2`; **slider passed** -> `acw_sc__v3` | proof of passing verification |
 
-所以语义是：`acw_tc` = 客户端会话跟踪；`cdn_sec_tc` = 同类会话标记；`acw_sc__v2` = JS 挑战凭证；`acw_sc__v3` = 滑块凭证。**以上均为官方文档明示，不是社区推断。**
+So the semantics are: `acw_tc` = client session tracking; `cdn_sec_tc` = same-class session marker; `acw_sc__v2` = JS challenge credential; `acw_sc__v3` = slider credential. **All of the above is explicitly stated in the official docs, not community inference.**
 
-官方补充的运维细节（对判断会话生命周期有用）：验证通过后默认 **1800 秒（30 分钟）** 内放行，可配 5–1800 秒；WAF 3.0 中跟踪 cookie（`acw_tc`）可配下发状态与 `secure`，**`SameSite` 暂不支持配置**；滑块 cookie（`acw_sc__v3`）可配 `secure`。
+Additional official operational details (useful for judging session lifetime): after verification passes, traffic is allowed by default within **1800 seconds (30 minutes)**, configurable 5-1800 seconds; in WAF 3.0 the tracking cookie (`acw_tc`) allows configuring the issuance state and `secure`, and **`SameSite` cannot be configured for now**; the slider cookie (`acw_sc__v3`) allows configuring `secure`.
 
-来源：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions 、https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups 、https://help.aliyun.com/zh/edge-security-acceleration/esa/support/http-header
+Sources: https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions , https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups , https://help.aliyun.com/zh/edge-security-acceleration/esa/support/http-header
 
-### `acw_sc__v2` 的生成算法（社区可复现，非官方）
+### The generation algorithm of `acw_sc__v2` (community-reproducible, not official)
 
-多个独立来源一致：`acw_sc__v2 = hexXor(unsbox(arg1))`，其中 `arg1` 是**服务端 202 响应内联脚本给出的 40 位 hex 字符串，每次刷新页面都变**。
+Multiple independent sources agree: `acw_sc__v2 = hexXor(unsbox(arg1))`, where `arg1` is **a 40-character hex string supplied by the inline script in the server's 202 response, changing on every page refresh**.
 
-- `unsbox` 是**字符重排**（按固定 40 元素置换表 `[15,35,29,24,33,16,1,38,10,9,19,31,40,27,22,23,25,13,6,11,39,18,20,8,14,21,32,26,2,30,7,4,17,5,3,28,34,37,12,36]` 还原顺序）
-- `hexXor` 是**固定密钥逐字节异或**，密钥 `3000176000856006061501533003690027800375`
-- 最终触发 `reload(arg2)`，`arg2` 即写入的 Cookie 值
+- `unsbox` is a **character rearrangement** (restoring the order according to the fixed 40-element permutation table `[15,35,29,24,33,16,1,38,10,9,19,31,40,27,22,23,25,13,6,11,39,18,20,8,14,21,32,26,2,30,7,4,17,5,3,28,34,37,12,36]`)
+- `hexXor` is a **byte-by-byte XOR with a fixed key**, key `3000176000856006061501533003690027800375`
+- It finally triggers `reload(arg2)`, and `arg2` is the cookie value that gets written
 
-原版 JS 中该密钥以 `_0x5e8b26` 变量出现，且脚本开头会先做环境探测（`while (window["_phantom"] || window["__phantomas"]) {}`）——**这一行说明它至少在检测 PhantomJS 类无头环境**。
+In the original JS this key appears as the variable `_0x5e8b26`, and the script begins with an environment probe (`while (window["_phantom"] || window["__phantomas"]) {}`) -- **this line shows that it at least detects PhantomJS-class headless environments**.
 
-**这是固定算法，不是动态 VM**，所以是阿里体系里最省力的一层。真正的难点在场景二（`ssxmod_itna*` 指纹）与滑块（`acw_sc__v3` 轨迹）。
+**This is a fixed algorithm, not a dynamic VM**, so it is the least laborious layer in the Alibaba system. The real difficulties are scenario two (`ssxmod_itna*` fingerprint) and the slider (`acw_sc__v3` trajectory).
 
-来源：https://www.cnblogs.com/wyh0923/p/16590583.html
+Source: https://www.cnblogs.com/wyh0923/p/16590583.html
 
-## 分层决策：先判断「哪一层在拦你」
+## Layered decision-making: first determine "which layer is blocking you"
 
-这是中文风控逆向最容易走错的地方。**多数失败源于攻错了层**。
+This is where Chinese risk-control reverse engineering most easily goes wrong. **Most failures come from attacking the wrong layer**.
 
 ```text
-请求失败
-  │
-  ├─ 返回 202 / 412，响应体是内联 JS        → 瑞数层（补环境 / 纯算法）
-  ├─ 返回 200 但内容是 <script> 挑战页       → JS 挑战层（acw_sc__v2 类）
-  ├─ 返回 403 且 Cookie 名可辨识厂商         → 厂商 WAF 层
-  ├─ 页面正常但接口 403/参数错误             → 签名参数层（sign/token/blackbox）
-  ├─ 页面正常但接口返回风控码                → 设备指纹层（需指纹自洽）
-  └─ 全部正常但几分钟后失效                  → 会话/令牌生命周期层
+request fails
+  |
+  |- returns 202 / 412, response body is inline JS   -> RiverSecurity layer (environment simulation / pure algorithm)
+  |- returns 200 but the content is a <script> challenge page -> JS challenge layer (acw_sc__v2 class)
+  |- returns 403 and the cookie name identifies a vendor -> vendor WAF layer
+  |- page is normal but the endpoint returns 403/parameter error -> signed-parameter layer (sign/token/blackbox)
+  |- page is normal but the endpoint returns a risk-control code -> device-fingerprint layer (fingerprint must be self-consistent)
+  |- everything is normal but it expires after a few minutes -> session/token lifetime layer
 ```
 
-**关键认知**：中文站点常**同时**部署多层。例如瑞数 6 代站点在通过挑战层后，业务接口还会**独立校验指纹**——「短 cookie 可过页面，但数据查询接口会校验指纹」是社区反复验证的现象。**通过第一层不等于通关**。
+**Key insight**: Chinese sites often deploy **several layers at once**. For example, after passing the challenge layer on a RiverSecurity generation-6 site, the business endpoints still **independently verify the fingerprint** -- "a short cookie can get past the page, but the data query endpoint verifies the fingerprint" is a phenomenon the community has repeatedly confirmed. **Getting past the first layer does not mean clearing the game**.
 
-## 通用对抗手段（跨厂商）
+## General countermeasures (cross-vendor)
 
-### 1. 补环境（主流、性价比最高）
+### 1. Environment simulation (bu-huanjing) (mainstream, best cost-performance)
 
-在 Node 中构造足以骗过检测的浏览器环境，直接运行站点代码产出参数。详见 `environment-simulation-jsvmp.md`。
+Construct a browser environment in Node that is convincing enough to fool the detection, and run the site's code directly to produce the parameters. See `environment-simulation-jsvmp.md` for details.
 
-推荐起点：[`pysunday/sdenv`](https://github.com/pysunday/sdenv)（基于改版 jsdom，社区评价「最舒服、又快又稳」）。
+Recommended starting point: [`pysunday/sdenv`](https://github.com/pysunday/sdenv) (based on a modified jsdom; the community rates it "the most comfortable, fast and stable").
 
-### 2. Hook + 全局导出
+### 2. Hook + global export
 
-把生成函数从闭包中「提」出来，在真实或模拟环境中调用。
+"Pull" the generating function out of its closure and call it in a real or simulated environment.
 
-| 目标 | Hook 点 |
+| Target | Hook point |
 |---|---|
-| Cookie 生成 | `document.cookie` 的 setter |
-| 易盾指纹 | `window["gdxidpyhxde"]` 的 setter |
-| 指纹生成函数 | 全局搜索特征参数名 → 断点 → 把函数挂到 `window` |
-| 请求参数 | `XMLHttpRequest.prototype.send` / `fetch` |
+| Cookie generation | the setter of `document.cookie` |
+| Yidun fingerprint | the setter of `window["gdxidpyhxde"]` |
+| Fingerprint generating function | globally search for the characteristic parameter name -> breakpoint -> attach the function to `window` |
+| Request parameters | `XMLHttpRequest.prototype.send` / `fetch` |
 
 ```js
-// Cookie setter hook：定位生成点
+// Cookie setter hook: locate the generation point
 let cookieTmp = '';
 Object.defineProperty(document, 'cookie', {
   get() { return cookieTmp; },
   set(v) {
     console.log('[cookie set]', v);
-    debugger;              // 在此看调用栈即可定位生成函数
+    debugger;              // the call stack here reveals the generating function
     cookieTmp = v;
     return v;
   },
 });
 ```
 
-### 3. Webpack 加载器复用
+### 3. Reusing the Webpack loader
 
-对自执行函数形态的混淆包，不必逐行扣代码：
+For self-executing-function-style obfuscated bundles, there is no need to extract code line by line:
 
-1. 把 webpack 加载器（`__webpack_require__`）全局化
-2. 给加载器加日志打印
-3. 配 `env.js` 补环境
-4. 用 `main.js` 调 `loader.js`，直接调用目标模块
+1. Globalize the webpack loader (`__webpack_require__`)
+2. Add logging to the loader
+3. Pair it with an `env.js` environment simulation
+4. Use `main.js` to call `loader.js` and invoke the target module directly
 
-### 4. RPC 远程调用
+### 4. RPC remote invocation
 
-本地完全不还原算法，起一个浏览器常驻进程，本地代码通过 WebSocket 把参数需求发给浏览器，由真实浏览器环境计算后回传。
+Do not restore the algorithm locally at all: start a resident browser process, and have local code send parameter requests to the browser over WebSocket, so that the real browser environment computes them and sends them back.
 
-**适用**：算法复杂但请求量不高；或作为「先跑通再优化」的第一步。
-**代价**：单机吞吐低，需管理浏览器池。
+**Applicable**: the algorithm is complex but the request volume is low; or as the first step of "get it running first, optimize later".
+**Cost**: low per-machine throughput, and you need to manage a browser pool.
 
-### 5. 轨迹生成
+### 5. Trajectory generation
 
-滑块/点选类需要轨迹：
+Slider/click-select types need trajectories:
 
-- 贝塞尔曲线
-- ease-in-out cubic 缓动
-- AI 生成轨迹函数
+- Bezier curves
+- ease-in-out cubic easing
+- AI-generated trajectory functions
 
-### 6. UA 一致性（最易忽略、收益最高）
+### 6. UA consistency (most easily overlooked, highest payoff)
 
-**JS 环境的 UA 必须与请求 UA 一致**。易盾场景实测报告：修正后通过率从 <20% 提升到 100%。
+**The UA of the JS environment must match the request UA**. A measured report from a Yidun scenario: after the fix, the pass rate rose from <20% to 100%.
 
-## 常见失败模式
+## Common failure modes
 
-| 症状 | 真实原因 | 修正 |
+| Symptom | Real cause | Fix |
 |---|---|---|
-| 补环境后本地能出 cookie，但请求仍被拒 | 指纹不自洽（`screen`/`devicePixelRatio`/WebGL 组合不合理） | 用真实浏览器采集的环境快照，不要逐项硬编码 |
-| 参数生成正确但接口返回风控 | 请求 UA / TLS 指纹与 JS 环境不一致 | 三层指纹对齐 |
-| 补环境时报错缺失某属性 | 只补了「广度」没补「深度」 | 现代风控检测属性间关联性与属性描述符 |
-| 本地跑通后隔天失效 | 站点算法迭代或 `$_ts` 类动态值变化 | 做动态匹配（正则/AST），不要写死 |
-| Selenium/Playwright 直跑被识别 | 自动化特征检测 | 不要指望浏览器自动化直接绕过；改用补环境或 RPC |
+| After environment simulation, a cookie is produced locally but the request is still rejected | the fingerprint is not self-consistent (`screen`/`devicePixelRatio`/WebGL combination is implausible) | use an environment snapshot collected from a real browser; do not hardcode item by item |
+| Parameters are generated correctly but the endpoint returns risk control | the request UA / TLS fingerprint is inconsistent with the JS environment | align all three fingerprint layers |
+| Environment simulation reports a missing property | only "breadth" was filled in, not "depth" | modern risk control detects relationships between properties and property descriptors |
+| It works locally but stops working the next day | the site's algorithm iterated, or a dynamic value such as `$_ts` changed | do dynamic matching (regex/AST); do not hardcode |
+| Selenium/Playwright run directly and get detected | automation-feature detection | do not expect browser automation to bypass this directly; switch to environment simulation or RPC |
 
-## 移动端加固（伴随问题）
+## Mobile app hardening (an accompanying problem)
 
-App 侧逆向常遇到加固壳，与 Web 风控是两条战线。
+App-side reverse engineering frequently runs into hardening shells, which is a separate front from web risk control.
 
-| 代际 | 技术特点 | 脱壳难度 | 代表工具 |
+| Generation | Technical characteristics | Unpacking difficulty | Representative tools |
 |---|---|---|---|
-| 一代：DEX 整体加密 | Dex 整体加密，动态加载 | 较易，内存 dump | FRIDA-DEXDump、Dexhunter、elf-dump-fix |
-| 二代：DEX 函数抽取 | 方法单独抽取加密，解密执行 | 可还原（dump 运行时方法体回填 dex） | FART、Youpk、BlackDex、Dex2oatHunter |
-| 三代：VMP / Dex2C | 独立虚拟机解释执行 / 语义等价语法迁移 | **Dex2C 目前无办法还原，只能跟踪分析**；VMP 保护映射表，可人工还原 | 无成熟自动化工具 |
+| Generation 1: whole-DEX encryption | whole Dex encrypted, dynamically loaded | relatively easy, memory dump | FRIDA-DEXDump, Dexhunter, elf-dump-fix |
+| Generation 2: DEX function extraction | methods individually extracted and encrypted, decrypted then executed | restorable (dump the runtime method bodies and backfill the dex) | FART, Youpk, BlackDex, Dex2oatHunter |
+| Generation 3: VMP / Dex2C | standalone virtual machine interpretation / semantics-equivalent syntax migration | **Dex2C currently has no way to be restored, only traced and analyzed**; VMP protects the mapping table and can be manually restored | no mature automated tooling |
 
-可核实的工具局限：
+Verifiable tooling limitations:
 
-- **FART** 仅提供 Android 6.0 与 8.0 镜像；原始版无法应对 root 检测，**Fart8** 抹除了指纹可应对。因项目知名，**加固厂商已将 FART 特征加入黑名单**。
-- **frida-fart** 需把 `fart.so`/`fart64.so` 拷到 `/data/app` 并 `chmod 777`；以 `spawn` 启动，进 Activity 后执行 `fart()`。高级用法 `dump(classname)` 可主动 dump 未执行过的方法（对函数抽取壳更有效）。**缺点：无法处理带反调试的壳**——付费版加固必带反调试，会识别 frida 特征，卡在启动界面且 frida-server 挂掉。
-- **BlackDex** 基于插件化思路，把目标 App 当插件运行到自己进程中。**因开源，特征明显，加固厂商易对抗**。
+- **FART** only provides Android 6.0 and 8.0 images; the original version cannot cope with root detection, while **Fart8** erased the fingerprint and can cope. Because the project is well known, **hardening vendors have already blacklisted FART's features**.
+- **frida-fart** requires copying `fart.so`/`fart64.so` into `/data/app` and `chmod 777`; it is started with `spawn`, and `fart()` is executed after entering the Activity. The advanced usage `dump(classname)` can actively dump methods that have never executed (more effective against function-extraction shells). **Drawback: it cannot handle shells with anti-debugging** -- paid hardening always ships anti-debugging, which recognizes the frida signature, leaving it stuck on the splash screen with frida-server dead.
+- **BlackDex** is based on a plugin-style idea, running the target app as a plugin inside its own process. **Because it is open source, its signature is obvious and hardening vendors can easily counter it**.
 
-**壳特征识别**：爱加密 5 代壳在 `assets` 下可见 `IJMDal.Data`。
+**Shell signature identification**: the fifth generation of the Ijiami shell shows `IJMDal.Data` under `assets`.
 
-> 各厂商特征 so 文件名清单（爱加密/梆梆/乐固/聚安全/易盾/通付盾/娜迦）在二手来源间存在出入，**属未核实**，实际识别应以现场 `lib/` 目录列表与加载流程为准。
+> The lists of characteristic `so` filenames per vendor (Ijiami/Bangcle/Legu/Ju'anquan/Yidun/Tongfudun/Nagain) differ between secondary sources and are **unverified**; actual identification should be based on the live `lib/` directory listing and the loading flow.
 
-## 来源
+## Sources
 
-- 社区风控集合（难点/特征表）：https://1997.pro/archives/1713518394359
-- 阿里云 Cookie 植入场景（官方）：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions
-- 阿里云防护对象设置（`acw_tc` 可配项）：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups
-- 阿里云 HTTP 头示例：https://help.aliyun.com/zh/edge-security-acceleration/esa/support/http-header
-- `acw_sc__v2` 算法（Python + JS 源码，含 `_0x5e8b26` 密钥）：https://www.cnblogs.com/wyh0923/p/16590583.html
-- 瑞数 4/5/6 代分析：https://www.cnblogs.com/ikdl/p/16453681.html 、https://www.cnblogs.com/ikdl/p/16647423.html 、https://www.cnblogs.com/ikdl/p/17778885.html
-- 瑞数 6 补环境实战：https://blog.csdn.net/2401_85468967/article/details/148050084
-- 数美 v4 设备 ID：https://cloud.tencent.com/developer/article/2475504
-- 同盾 BlackBox：https://1997.pro/archives/1706068432055
-- 同盾 v2 滑块 p1~p9：https://cloud.tencent.com/developer/article/2501583
-- 易盾 fp / gdxidpyhxdE：https://blog.csdn.net/weixin_46625757/article/details/145442263
-- 易盾滑块全参数：https://blog.csdn.net/Bushixiana/article/details/149002049
-- 顶象请求链与参数：https://www.cnblogs.com/boycelee/p/14270112.html
-- 加固三代划分：https://blog.csdn.net/weixin_39190897/article/details/114269713
-- 加固与脱壳实操：https://juejin.cn/post/7423310754952675379
+- Community risk-control collection (difficulty/characteristic table): https://1997.pro/archives/1713518394359
+- Aliyun cookie injection scenarios (official): https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions
+- Aliyun protected-object settings (`acw_tc` configurable items): https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups
+- Aliyun HTTP header example: https://help.aliyun.com/zh/edge-security-acceleration/esa/support/http-header
+- `acw_sc__v2` algorithm (Python + JS source, including the `_0x5e8b26` key): https://www.cnblogs.com/wyh0923/p/16590583.html
+- RiverSecurity generation 4/5/6 analyses: https://www.cnblogs.com/ikdl/p/16453681.html , https://www.cnblogs.com/ikdl/p/16647423.html , https://www.cnblogs.com/ikdl/p/17778885.html
+- RiverSecurity generation 6 environment-simulation field report: https://blog.csdn.net/2401_85468967/article/details/148050084
+- Shumei v4 device ID: https://cloud.tencent.com/developer/article/2475504
+- Tongdun BlackBox: https://1997.pro/archives/1706068432055
+- Tongdun v2 slider p1~p9: https://cloud.tencent.com/developer/article/2501583
+- Yidun fp / gdxidpyhxdE: https://blog.csdn.net/weixin_46625757/article/details/145442263
+- Yidun slider full parameter set: https://blog.csdn.net/Bushixiana/article/details/149002049
+- Dingxiang request chain and parameters: https://www.cnblogs.com/boycelee/p/14270112.html
+- Three-generation hardening taxonomy: https://blog.csdn.net/weixin_39190897/article/details/114269713
+- Hardening and unpacking in practice: https://juejin.cn/post/7423310754952675379
 
-## 未核实清单（引用前需自行验证）
+## Unverified list (verify before citing)
 
-以下条目在二手来源间存在出入或仅有一处出处，**不应作为事实陈述**：
+The following items differ between secondary sources or have only a single origin, and **should not be stated as fact**:
 
-1. 瑞数「2^32 算法 × 2^24 变形 × 2^128 密钥」的量化说法——仅为厂商口径，无独立验证
-2. 腾讯云 WAF 独立的 JS 挑战 Cookie 名与算法
-3. 顶象错误码 `-10001` ~ `-10007`
-4. 同盾官方 Web SDK 的完整字段清单
-5. 各厂商加固特征 `so` 文件名清单（爱加密/梆梆/乐固/聚安全/易盾/通付盾/娜迦）——二手来源互相矛盾，实际识别应以现场 `lib/` 目录与加载流程为准
-6. 360 加固 `DtcLoader` / `/proc/self/maps` 反调试的完整链路
-7. `gee_guard` 作为 Cookie 名或参数名的用法（「GeeGuard 是设备指纹产品名」已核实，但「作为 cookie 参数出现」未核实）
-8. 极验部分版本把关键逻辑下沉 WASM（AES-CBC + HMAC-SHA256）
+1. RiverSecurity's quantified claim of "2^32 algorithms x 2^24 variants x 2^128 keys" -- vendor wording only, with no independent verification
+2. The independent JS challenge cookie name and algorithm of Tencent Cloud WAF
+3. Dingxiang error codes `-10001` ~ `-10007`
+4. The complete field list of Tongdun's official Web SDK
+5. The list of hardening characteristic `so` filenames per vendor (Ijiami/Bangcle/Legu/Ju'anquan/Yidun/Tongfudun/Nagain) -- secondary sources contradict each other; actual identification should be based on the live `lib/` directory and the loading flow
+6. The complete chain of 360 hardening's `DtcLoader` / `/proc/self/maps` anti-debugging
+7. The usage of `gee_guard` as a cookie name or parameter name ("GeeGuard is a device-fingerprint product name" is verified, but "appears as a cookie parameter" is not)
+8. Some GeeTest versions pushing key logic down into WASM (AES-CBC + HMAC-SHA256)

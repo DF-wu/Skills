@@ -29,7 +29,7 @@ API — read-only — without ever solving the login.
    SPA's chunks) for `"/api/..."` string literals and field names. The page route ≠ the API route.
 6. **Stay read-only during recon.** GET + grep only. Do **not** POST state-changing actions (don't
    consume quotas / trigger writes) until you understand the contract. Don't blindly click DOM
-   buttons either — greedy text matching misclicks (a "立即…" match once triggered a donation).
+   buttons either — greedy text matching misclicks (a "sign up now" match once triggered a donation).
 7. **Reproduce.** Once mapped, either keep driving via the browser (if CF-gated) or replay with
    `curl_cffi` reusing the cookies (if the API tolerates non-browser clients).
 

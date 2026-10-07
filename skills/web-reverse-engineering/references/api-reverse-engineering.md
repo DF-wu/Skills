@@ -18,7 +18,7 @@ Direct API extraction is usually more stable than HTML parsing.
 | mitmproxy | intercept/modify traffic, mobile app traffic | `pip install mitmproxy` |
 | **mitmproxy2swagger** | auto-derive OpenAPI/Swagger from captured traffic | https://github.com/alufers/mitmproxy2swagger |
 | Charles Proxy | GUI-based interception/replay | commercial |
-| **Reqable** (原 HttpCanary) | mobile-first GUI proxy | https://reqable.com |
+| **Reqable** (formerly HttpCanary) | mobile-first GUI proxy | https://reqable.com |
 | Frida | runtime hooking, SSL pinning bypass | project-specific |
 | **grpcurl** | gRPC with server reflection | https://github.com/fullstorydev/grpcurl |
 | **pbtk / blackboxprotobuf** | protobuf without `.proto` | see `protocol-reverse-engineering-advanced.md` |
@@ -84,7 +84,7 @@ Common blockers:
 - short-lived access tokens
 - one-time nonce values
 - HMAC signatures tied to timestamps/body
-- **vendor-signed parameters** (极验 `w`, 数美 `data`, 同盾 `blackbox`)
+- **vendor-signed parameters** (GeeTest `w`, Shumei `data`, Tongdun `blackbox`)
 
 Mitigation:
 - emulate exact call sequence

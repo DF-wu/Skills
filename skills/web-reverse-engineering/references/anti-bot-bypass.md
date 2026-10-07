@@ -20,14 +20,14 @@ This page is tactical: detection vectors + recommended response stack.
 
 | Vendor | Product | Core mechanism | Difficulty |
 |---|---|---|---|
-| 瑞数 RiverSecurity | Botgate | Dynamic obfuscation + VM + eval | Very High (per-site) |
-| 阿里云盾 / 阿里 WAF | ESA / WAF 3.0 | Cookie tracking + JS challenge + slider | High |
-| 腾讯 | TCaptcha (天御/防水墙) | JSVMP device fingerprint + PoW | Very High |
-| 网易易盾 | NECaptcha | Device fingerprint + behavior | High |
-| 数美 shumei | 天网 | Device fingerprint + content | Medium |
-| 顶象 dingxiang | 智能无感验证 | Dynamic JS + env checks | High |
-| 同盾 | 设备指纹 / tdCaptcha | Blackbox fingerprint + slider | High |
-| 极验 GeeTest | Sensebot | Trajectory + fingerprint + PoW | Medium |
+| RiverSecurity | Botgate | Dynamic obfuscation + VM + eval | Very High (per-site) |
+| Aliyun WAF | ESA / WAF 3.0 | Cookie tracking + JS challenge + slider | High |
+| Tencent | TCaptcha | JSVMP device fingerprint + PoW | Very High |
+| NetEase Yidun | NECaptcha | Device fingerprint + behavior | High |
+| Shumei | Tianwang | Device fingerprint + content | Medium |
+| Dingxiang | passive/transparent verification | Dynamic JS + env checks | High |
+| Tongdun | device fingerprint / tdCaptcha | Blackbox fingerprint + slider | High |
+| GeeTest | Sensebot | Trajectory + fingerprint + PoW | Medium |
 
 **Chinese vendors need a different approach than Western ones.** Western defenses are fingerprint-first; Chinese defenses are **signed-parameter-first**. See `cn-risk-control-ecosystem.md` and `captcha-vendors-cn.md`.
 

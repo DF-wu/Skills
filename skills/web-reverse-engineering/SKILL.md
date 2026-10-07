@@ -1,6 +1,6 @@
 ---
 name: web-reverse-engineering
-description: "Universal reverse-engineering and anti-bot guide: web scraping, API RE, signed-parameter reversal, environment simulation (补环境), JS deobfuscation and JSVMP, session mapping, mobile RE (Android/iOS/Flutter/Hermes), mini-programs (wxapkg/TTPKG), protocols (WebSocket/gRPC/QUIC/MQTT/CAN), binary RE (WASM, native, .NET, Go, Rust, Electron, Tauri, PyInstaller, installers, VMProtect/Themida), desktop app RE, game engines (Unity IL2CPP/Unreal/Godot), firmware/embedded/IoT/hardware/automotive RE, document and proprietary formats, traffic camouflage, TLS/HTTP fingerprinting, device fingerprint spoofing, identity separation, anti-bot vendor ID (Cloudflare/Akamai/DataDome/HUMAN/Kasada/Imperva/Anubis) plus Chinese risk control (瑞数/极验/数美/易盾/顶象/同盾). Use to understand an undocumented protocol or format, reproduce a client, analyze a binary or firmware, test a bot defense, map an authenticated API, or check the authorization boundaries of such work."
+description: "Universal reverse-engineering and anti-bot guide: web scraping, API RE, signed-parameter reversal, environment simulation (bu-huanjing), JS deobfuscation and JSVMP, session mapping, mobile RE (Android/iOS/Flutter/Hermes), mini-programs (wxapkg/TTPKG), protocols (WebSocket/gRPC/QUIC/MQTT/CAN), binary RE (WASM, native, .NET, Go, Rust, Electron, Tauri, PyInstaller, installers, VMProtect/Themida), desktop app RE, game engines (Unity IL2CPP/Unreal/Godot), firmware/embedded/IoT/hardware/automotive RE, document and proprietary formats, traffic camouflage, TLS/HTTP fingerprinting, device fingerprint spoofing, identity separation, anti-bot vendor ID (Cloudflare/Akamai/DataDome/HUMAN/Kasada/Imperva/Anubis) plus Chinese risk control (RiverSecurity/GeeTest/Shumei/Yidun/Dingxiang/Tongdun). Use to understand an undocumented protocol or format, reproduce a client, analyze a binary or firmware, test a bot defense, map an authenticated API, or check the authorization boundaries of such work."
 ---
 
 # Web Reverse Engineering (Universal)
@@ -144,8 +144,8 @@ Target -> What is required?
 
 16) Response is a 202/412 page with an obfuscated <script>, cookie like
     FSSBBIl1UgzbN7N80S, or window.$_ts?
-    -> 瑞数 RiverSecurity. Per-site dynamic VM. NO universal solution.
-    -> Two routes: environment simulation (补环境) or pure algorithm (rs-reverse).
+    -> RiverSecurity. Per-site dynamic VM. NO universal solution.
+    -> Two routes: environment simulation (bu-huanjing) or pure algorithm (rs-reverse).
     -> See references/ruishu-river-security.md.
 
 17) API request contains an opaque parameter (sign/token/w/blackbox/data/msg)
@@ -175,7 +175,7 @@ Target -> What is required?
     -> Reuse the auth cookie instead of re-solving.
     -> See references/frontier-anti-bot-2026.md.
 
-23) Target is a Chinese CAPTCHA (极验/数美/易盾/顶象/同盾)?
+23) Target is a Chinese CAPTCHA (GeeTest/Shumei/Yidun/Dingxiang/Tongdun)?
     -> Route by volume: <1k/day -> solving API; >10k/day -> algorithm reversal.
     -> Slider CAPTCHAs: trajectory quality matters as much as the crypto.
     -> See references/captcha-vendors-cn.md.
@@ -338,7 +338,7 @@ the long-lived session cookie.
 - **Akamai**: `_abck` sensor data; `_abck` needs ~3 sensor posts to become valid (`~0~`)
 - **Aliyun**: `acw_tc` (2-5 min TTL), `acw_sc__v2` requires algorithm reversal
 - **Imperva**: `reese84`
-- **瑞数**: `FSSBBIl1UgzbN7N80S` + `window.$_ts` — per-site, no universal solution
+- **RiverSecurity**: `FSSBBIl1UgzbN7N80S` + `window.$_ts` — per-site, no universal solution
 
 **Optimization**: Cache WAF cookies for 1-3 minutes. Test expiry empirically.
 
@@ -377,7 +377,7 @@ See `references/proxy-rotation-strategies.md`.
 | Volume | Route | Why |
 |---|---|---|
 | < 1k/day | RPC to a real browser | Cheapest to build; call the vendor's own JS |
-| 1k–10k/day | Environment simulation (补环境) | Run vendor JS in Node; no algorithm porting |
+| 1k–10k/day | Environment simulation (bu-huanjing) | Run vendor JS in Node; no algorithm porting |
 | > 10k/day | Pure-algorithm reversal | Highest upfront cost, lowest marginal cost |
 
 **Step 2: Locate the generation point.**
@@ -395,16 +395,16 @@ request-URL string, breakpoint on `XMLHttpRequest.send`, or hook `JSON.stringify
 |---|---|---|
 | crypto-js | `CryptoJS.AES.encrypt(...)`, `CryptoJS.MD5` | Check the version — API changed across majors. **crypto-js is discontinued.** |
 | JSEncrypt | `JSEncrypt`, PEM public key | PEM↔jsbn parameter mapping is the usual bug |
-| 国密 | `sm2` / `sm3` / `sm4` | `sm-crypto` in JS; `pysmx` / `gmssl` in Python |
-| 魔改 Base64 | Custom alphabet | Find the 64-char permutation table |
-| 极验 | `w = aes_hex(plaintext, key_16) + rsa_hex(key_16, public_key)` | Key is random per challenge |
+| Chinese national crypto (SM) | `sm2` / `sm3` / `sm4` | `sm-crypto` in JS; `pysmx` / `gmssl` in Python |
+| Permuted Base64 | Custom alphabet | Find the 64-char permutation table |
+| GeeTest | `w = aes_hex(plaintext, key_16) + rsa_hex(key_16, public_key)` | Key is random per challenge |
 | RSA-PKCS1 | Base64 of a fixed-length blob | Check padding scheme and byte order |
 
 **Step 5: Reproduce and verify against a captured fixture** before scaling.
 
 See `references/signature-parameter-re.md` and `references/captcha-vendors-cn.md`.
 
-### J) "Run vendor JS locally (补环境 / environment simulation)"
+### J) "Run vendor JS locally (environment simulation / bu-huanjing)"
 
 The highest-leverage technique against vendor risk engines: instead of porting an
 algorithm, run the vendor's own code in a controlled Node environment.
@@ -594,7 +594,7 @@ See `references/software-reverse-engineering.md` §6 and
 | L3 | JS + browser fingerprint | Playwright + stealth patching | Cloudflare JS challenge, Imperva `reese84` |
 | L4 | behaviour + challenge loops | Patchright/nodriver/Camoufox + residential/ISP | CF managed challenge, DataDome |
 | L5 | enterprise bot manager | full stack + adaptive controls + fallback APIs | Akamai BMP, HUMAN, Kasada, F5 |
-| **L6** | **signed-parameter / VM risk engine** | **algorithm reversal or environment simulation; NOT browser automation** | **瑞数, 腾讯 TCaptcha, 极验, 易盾, 数美, 顶象, 同盾** |
+| **L6** | **signed-parameter / VM risk engine** | **algorithm reversal or environment simulation; NOT browser automation** | **RiverSecurity, Tencent TCaptcha, GeeTest, Yidun, Shumei, Dingxiang, Tongdun** |
 | **L7** | **commercial gate / cost imposition** | **pay, license, or stop — not a technical problem** | **Cloudflare Pay Per Crawl (402), AI Labyrinth** |
 
 **Escalation strategy**:
@@ -633,7 +633,7 @@ When a target blocks you, identify the layer before choosing a fix.
 | "Checking your browser" page | JS challenge | Browser path, or solve the challenge |
 | Works manually, fails in code | Missing token/cookie | Replay the full request chain |
 | Challenge passes, API rejects | Device fingerprint (layer 2) | See `cn-risk-control-ecosystem.md` |
-| 202/412 with obfuscated script | 瑞数 dynamic VM | See `ruishu-river-security.md` |
+| 202/412 with obfuscated script | RiverSecurity dynamic VM | See `ruishu-river-security.md` |
 | 403 with a valid signature | Wrong canonicalization | Compare two near-identical requests |
 | Signature accepted once, then rejected | Nonce replay protection | Fresh nonce per request |
 | **429 with `x-kpsdk-*` headers** | **Kasada proof of work** | Solve the PoW; do not just retry |
@@ -676,7 +676,7 @@ tells you the opposite of the truth.
 ### Compliance and boundaries
 
 - `references/compliance-and-scope.md` — **authorization line, statutory research exemptions with expiry dates, dual-use reasoning, machine-readable preference signals, stop conditions, agent guidance**
-- `references/legal-ethical.md` — **case law (US/EU/CN), 刑法285/286 thresholds, 反不正当竞争法 2025, DMCA §1201 ninth triennial, risk matrix**
+- `references/legal-ethical.md` — **case law (US/EU/CN), Criminal Law Art. 285/286 thresholds, Anti-Unfair Competition Law 2025, DMCA §1201 ninth triennial, risk matrix**
 - `references/identity-and-attribution.md` — **four-layer separation (identity/machine/network/behaviour), fingerprint coherence cross-checks, antidetect browser honest assessment**
 
 ### Foundations
@@ -711,7 +711,7 @@ tells you the opposite of the truth.
 ### JavaScript
 
 - `references/js-deobfuscation.md` — **obfuscator identification, option→reversal map, webpack/Vite/sourcemap recovery**
-- `references/environment-simulation-jsvmp.md` — **补环境 harness, the three node:vm realm facts, JSVMP internals, anti-virtualization**
+- `references/environment-simulation-jsvmp.md` — **environment-simulation harness, the three node:vm realm facts, JSVMP internals, anti-virtualization**
 
 ### Software and binary reverse engineering
 
@@ -736,10 +736,10 @@ tells you the opposite of the truth.
 ### Chinese risk control
 
 - `references/cn-risk-control-ecosystem.md` — **vendor matrix, layer decision tree, mobile hardening generations**
-- `references/ruishu-river-security.md` — **瑞数 detection table, generation differences, both routes**
+- `references/ruishu-river-security.md` — **RiverSecurity detection table, generation differences, both routes**
 - `references/captcha-bypass.md` — avoidance-first model, CAPTCHA classes, solver integration
-- `references/captcha-vendors-cn.md` — **per-vendor parameter breakdown (极验/阿里/腾讯/易盾/数美/顶象/同盾)**
-- `references/signature-parameter-re.md` — **locating and reversing signed parameters, 国密, crypto-js traps**
+- `references/captcha-vendors-cn.md` — **per-vendor parameter breakdown (GeeTest/Aliyun/Tencent/Yidun/Shumei/Dingxiang/Tongdun)**
+- `references/signature-parameter-re.md` — **locating and reversing signed parameters, Chinese national crypto (SM), crypto-js traps**
 - `references/miniprogram-reverse-engineering.md` — **wxapkg/TTPKG/Alipay, cloud functions, request characteristics**
 
 ### Special targets
@@ -753,7 +753,7 @@ tells you the opposite of the truth.
 |---|---|
 | `scripts/fingerprint_probe.py` | **Verify your TLS/HTTP fingerprint against a reference before writing bypass code** |
 | `scripts/signature_probe.js` | **Locate where a signed parameter is generated (hooks XHR/fetch/cookie/crypto)** |
-| `scripts/env_harness_template.js` | **补环境 skeleton with the dual-realm toString spoof and stack scrubbing already handled** |
+| `scripts/env_harness_template.js` | **environment-simulation skeleton with the dual-realm toString spoof and stack scrubbing already handled** |
 | `scripts/wxapkg_unpack.py` | **Dependency-free wxapkg parser/unpacker with header validation and traversal defense** |
 | `scripts/wasm_triage.py` | **WASM triage: toolchain, crypto constants, DWARF, route recommendation** |
 | `scripts/camoufox_template.py` | Camoufox browser baseline |
@@ -786,29 +786,6 @@ Stop when:
 Do not treat Terms of Service as a hard stop. In most jurisdictions, public data scraping
 does not constitute "unauthorized access" under criminal computer fraud statutes.
 Contractual disputes and criminal liability are different risk categories. Note the
-asymmetry: **China's 反不正当竞争法 (2025 revision, effective 2025-10-15) explicitly
-targets 避开或破坏技术管理措施**, making anti-bot evasion legally riskier in China than in
+asymmetry: **China's Anti-Unfair Competition Law (2025 revision, effective 2025-10-15) explicitly
+targets circumvention or destruction of technical management measures**, making anti-bot evasion legally riskier in China than in
 the US or EU. See `references/compliance-and-scope.md` and `references/legal-ethical.md`.
-
----
-
-## 中文速查
-
-**授权边界**：技术中立，**授权不中立**。红线是**绕过认证**，不是绕过反爬挑战。违反 ToS 是民事问题，不是犯罪。规避版权作品的 TPM 是第三类独立风险。详见 [`references/compliance-and-scope.md`](references/compliance-and-scope.md)。
-
-**先识别再动手**：① 是哪一层在拦（传输指纹 / 浏览器运行时 / 行为 / 签名参数 / 设备指纹）？② 是哪家厂商（Cloudflare / Akamai / DataDome / HUMAN / Kasada / Imperva / F5 / Arkose / Anubis）？两个问题都不清楚就动手，等于随机试错。
-
-**L0–L7 阶梯**：L0 无防护 → L1 IP 限速 → L2 TLS 指纹 → L3 JS + 浏览器指纹 → L4 行为 + 挑战循环 → L5 企业级 bot manager → **L6 签名参数 / VM 风控引擎（换范式，不是加强规避）** → **L7 商业闸门（HTTP 402，付钱或停止）**。
-
-**各层关键事实**：
-- **L2**：`impersonate="chrome"` 在 curl_cffi 中上报 **macOS** UA，覆盖成 Windows 就制造了 UA 与 TLS 的矛盾。开启扩展随机化后 **JA3 每次请求都变**，基线比较用 JA4。
-- **L5**：**厂商决定杠杆**。DataDome 逐请求独立评分 → IP 信誉权重最高；HUMAN 信誉全网共享 → 一个指纹烧毁即全线烧毁；Kasada 按会话信任度升级 PoW 难度 → **经济防御**，`x-kpsdk-cd` **一次性使用**所以重放捕获的头必然失败，且首触是 **429 而非 403**；Akamai 首要修 TLS 一致性，`_abck` 需约 3 次 sensor POST 才转有效。
-- **L6**：**换范式**。用浏览器自动化打 L6 目标然后得出"做不到"的结论，是方法错误。
-- **L7**：402 是商业决定，不是技术难题。
-
-**跨域入口**：桌面软件 → `software-reverse-engineering.md`；固件硬件 → `firmware-and-hardware-re.md`；语言选型 → `language-ecosystems.md`；伪装与协议拟态 → `traffic-camouflage.md`；身份隔离 → `identity-and-attribution.md`；全球厂商 → `global-anti-bot-vendors.md`。
-
-**最高频的三个纠正**：
-1. **vm 上下文有独立的内建对象**——在外层补 `String.prototype.indexOf` 对上下文内的代码**完全无效**，必须在 `runInContext` 内再补一次；`Symbol.for` 的全局注册表**是**跨上下文共享的。
-2. **`node:vm` 明确不是安全边界**（Node 官方文档），运行真正不可信的代码要用 `isolated-vm`。
-3. **固件提取静默失败多于报错失败**——拿到不完整的文件系统而不自知是常态，必须验证完整性；SquashFS 因厂商非标准压缩而失败是最常见的单点，用 **sasquatch**。

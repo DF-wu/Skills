@@ -93,8 +93,8 @@ Three passes, in this order. The first two usually settle it.
 | **200 with a poisoned body** | **F5 Shape** | Transform-200 on a specific endpoint; the homepage may be clean |
 | **428** | Akamai sec-cpt | Precondition Required — forced wait + PoW |
 | **405** | AWS WAF | CAPTCHA/Challenge interception on a POST |
-| **202** with an obfuscated `<script>` | 瑞数 RiverSecurity | Chinese vendors use 202/412 |
-| **412** | 瑞数, some WAFs | Precondition failed = challenge |
+| **202** with an obfuscated `<script>` | RiverSecurity | Chinese vendors use 202/412 |
+| **412** | RiverSecurity, some WAFs | Precondition failed = challenge |
 | **402** | Cloudflare / AWS WAF / x402 | Commercial gate — stop |
 
 Kasada's use of **429 rather than 403** is the detail that trips people up. A 429 with
@@ -478,7 +478,7 @@ variable fixed.
 25.1–26.5% of *all* websites and 85.0–85.3% of sites with a known reverse proxy. By rank:
 61.8% of the top 1,000, 66.3% of the top 10,000, 72.7% of the top 100,000, 80.9% of the
 top 1M. Akamai is only 0.6–0.7% of all websites but rises to **21.3% of the top 1,000** —
-head-site concentration is far higher than全网 share.
+head-site concentration is far higher than the whole-web share.
 
 **How to read any of this**: block rate is a function of *configuration, target type, and
 who is driving the traffic*, not just vendor. The e-commerce vs general-web gap (Akamai
@@ -501,12 +501,10 @@ Management Graduates — Introducing The Bot And Agent Trust Management Market"*
 category from "bot management software" to **"bot and agent trust management software"**.
 Forrester's own definition:
 
-> 识别并分析指向应用的自动化流量的意图，与良好 bot 和 AI agent 建立持续信任关系，同时拒绝
-> 并误导恶意 bot 与 AI agent，以保护合法客户业务并提高攻击者成本。
-> (Identify and analyze the intent of automated traffic to applications, build ongoing
+> Identify and analyze the intent of automated traffic to applications, build ongoing
 > trust relationships with good bots and AI agents, while denying and misleading
 > malicious bots and AI agents — to protect legitimate customer business and raise
-> attacker cost.)
+> attacker cost.
 
 Report timeline:
 
@@ -596,7 +594,7 @@ simultaneously, then having no idea which change mattered.
 
 ## 7. Relationship to other documents
 
-- Chinese vendors (瑞数/极验/数美/易盾/顶象/同盾): [`cn-risk-control-ecosystem.md`](cn-risk-control-ecosystem.md)
+- Chinese vendors (RiverSecurity / GeeTest / Shumei / Yidun / Dingxiang / Tongdun): [`cn-risk-control-ecosystem.md`](cn-risk-control-ecosystem.md)
 - Per-vendor CAPTCHA parameter breakdown: [`captcha-vendors-cn.md`](captcha-vendors-cn.md)
 - 2025–2026 new mechanisms (AI Labyrinth, Pay Per Crawl, Content Signals, PoW):
   [`frontier-anti-bot-2026.md`](frontier-anti-bot-2026.md)
@@ -605,38 +603,3 @@ simultaneously, then having no idea which change mattered.
 - Avoidance-first strategy: [`anti-bot-bypass.md`](anti-bot-bypass.md),
   [`captcha-bypass.md`](captcha-bypass.md)
 - Authorization and scope: [`compliance-and-scope.md`](compliance-and-scope.md)
-
----
-
-## 中文摘要
-
-**为什么先做识别**：最贵的错误是把正确的技术用在不匹配的厂商上。Cloudflare 的答案是"一个能过 Turnstile 的浏览器"；Kasada 的答案是"工作量证明求解器"；DataDome 的答案是"IP 信誉"；Akamai 的答案是"TLS 一致性"；F5 Shape 的答案是"真实浏览器 + 可复用性为零"。这是五个不同的问题。
-
-**单次响应识别三步**：① Cookie（`__cf_bm`/`cf_clearance`→Cloudflare，`_abck`/`bm_sz`→Akamai，`datadome`→DataDome，`_px*`→HUMAN/PerimeterX，`reese84`→Imperva，`_cq_*`→CHEQ，`aj_signals`→Arcjet）；② 响应头（`cf-mitigated` 才证明 Cloudflare 真的开了 Bot Management，仅有 `Server: cloudflare` 不算；`x-kpsdk-ct/cd/v`→Kasada；`Inference`→F5 Shape；`crawler-price`→Pay Per Crawl）；③ HTML（`/cdn-cgi/challenge-platform/`、`sensor.js`、`captcha-delivery.com`、`px-cdn.net`、Kasada 的双 UUID 路径、`funcaptcha.com`、`challenge.js`、`/.within.website/`）。
-
-**状态码本身是厂商特征，但有三个会主动误导你**：
-- **Imperva** 常用 **200 + 假页面**（"Pardon Our Interruption"）——只看状态码会以为成功。
-- **F5 Shape** 在特定 endpoint 返回 **200 + 被投毒的 body**（transform 200）——首页可能是干净的 200。
-- **Kasada** 拒绝时返回**裸 403/429 且完全没有 body**——"找不到阻断页"本身就是特征。
-- 其余：Cloudflare/Imperva 常规用 403；**Kasada 首触用 429**（"去跑工作量证明"）；Akamai sec-cpt 用 **428**；AWS WAF 拦截 POST 用 **405**；瑞数用 **202/412**；**402** 是商业闸门（停止）。
-
-**各厂商的关键差异**：
-- **Cloudflare**：可按站点配置，同一域名可能完全没开 Bot Management。域名覆盖最大（W3Techs：全网 25.1–26.5%，已知反向代理中 85%；top 1,000 中 61.8%）。
-- **Akamai**：`sensor_data` 为加密载荷，编码 100+ 信号，脚本持续更新——**针对具体版本做逆向会在下个版本失效**。`_abck` 需要约 3 次 sensor POST 才转为有效（`~0~`），且 v3 sensor 以 `bm_sz` 派生值为输入，**跨 session 复用 `bm_sz` 会导致 sensor 被拒**。**TLS 一致性是最高杠杆的单一修复点。**
-- **DataDome**：**逐请求独立评分**而非会话累积信任 → **IP 信誉权重最高**，代理质量是首要杠杆。按站点训练 ML（据称 85,000+ 模型），一个站点上的方案迁移性差。**2026-01 起换装浏览器内 VM**（bytecode + XOR 字符串 + 自定义 opcode），难度再次抬升。
-- **HUMAN/PerimeterX**：**信誉在整个客户网络内共享**，一个指纹在一个站点烧毁即**全线烧毁**——试错成本最高。架构为 Sensor → Detector → Enforcer，另有 Code Defender 监测客户端篡改（含 `toString()` 修补）。**`_px`/`_px2`/`_px3` 是 5.5 分钟的 JS cookie**——社区常说的"60 秒"是错的，以官方 cookie 表为准。
-- **Kasada**：多态混淆 VM 内的 PoW。`x-kpsdk-ct` 为会话令牌（约 30 分钟），`x-kpsdk-cd` 含 PoW 答案（**含耗时**）且**一次性使用、逐请求派生**，`x-kpsdk-h` 是绑定两者的 HMAC——因此**重放捕获的头必然失败**。另有**硬件指纹**（绑定实际执行 JS 的硬件），这是数据中心 VM 即使 TLS 与 IP 全对仍失败的原因。难度随会话新鲜度升级，**这是经济防御而非密码学防御**。
-- **Imperva**：`reese84` 三段格式 `3:<base64>:<base64>`，**只能由真实浏览器运行 sensor 产生**，裸 HTTP 客户端无法铸造；另有 700 维行为分析与四件套 cookie 链一致性检查。实测阻断率约 46.6%（CI 40.6–52.6，样本 142）。
-- **F5 两条线必须分开**：`TS*`/`TSPD_101` 属 **BIG-IP**（ASM / Bot Defense）；Shape 线**没有固定 cookie 名**，靠 JS 执行后主动发送的**逐部署混淆遥测头**（`X-<token>-a…z`），且**策略挂在 endpoint + method 上而非 hostname**——只探测首页会得出"未受保护"的错误结论。遥测**一次性且绑 IP**，无法缓存重放。难度 **very high**。**`_imp_apg_r_` 无法证实为 Shape 签名，不要当事实用。**
-- **无客户端产物的两家**：**Netacea** 与 **Cequence** 按设计不做客户端集成（agentless），**没有 cookie/脚本/头可指纹化**，正向识别不可能，只能靠行为面 + 排除法；也**没有 payload 可逆向或离线重放**，规避问题完全塌缩为"行为塑形"。
-- **Anubis**（开源）：PoW，默认难度 5，曾受 CVE-2025-24369 影响。对策是用原生代码求解（比浏览器 JS 快约两个数量级）并复用 JWT cookie。
-
-**基准数据的正确读法（重要）**：**同一厂商在不同研究里的阻断率能差 5 倍**——Cloudflare 在 AIMultiple 是 6.7%、在 arXiv 是 37.0%。原因是测的东西不同：AIMultiple 走**商业抓取 API**（Bright Data/Zyte/Nimble，本身已做反检测），arXiv 对比**四种浏览器配置含 headless 对照**。**两个数字不能互相比较，引用时必须带测试条件。** arXiv 另外的发现值得记住：**82%** 的阻断可归因于 bot 检测；**75% 的"仅 headless 被拦"由 header 层信号单独造成**；**46%** 的站点探测了只存在于自动化浏览器的 JS 属性（探测面远大于阻断面）；81 篇顶会爬虫论文中 **83% 完全未讨论 bot 检测阻断**。W3Techs 是唯一方法透明的部署数据。
-
-**2025–2026 的转折（已核实）**：Forrester 于 **2025-10-03** 由 Sandy Carielli 发布博文，把品类从 "bot management" 改为 **"bot and agent trust management"**；Landscape Q4 2025（2025-12-18，19 家）；**Wave Q2 2026（2026-06-15）：Leader 为 DataDome / HUMAN / Kasada**，Strong Performer 为 Arkose / CHEQ / Netacea，Contender 为 hCaptcha / reCAPTCHA Enterprise。**Cloudflare 与 Akamai 不在该 Wave 名单内。** 数据：恶意自动化流量 2025-07 至 2026-06 增长 **124%**；**65.3%** 的受测网站对 10 种 bot/AI-agent 类型完全无防护（完全防护率 8.4%→2.8%→**2.4%** 连续三年下降）；**80%** 的 AI agent 不自我声明身份；伪造的 ChatGPT 风格 UA 在约 69.8 万站点中 **79.7%** 畅通无阻。工程含义：**任何依赖 agent 自我声明的识别机制都在测量空气**。
-
-**身份层底座 Web Bot Auth**：基于 **RFC 9421 HTTP Message Signatures**，每个 bot 用 **Ed25519** 私钥签名，公钥以 JWKS 形式放在 `/.well-known/http-message-signatures-directory`，请求带 `Signature`/`Signature-Input`/`Signature-Agent`。验证方含 Cloudflare / Akamai / Vercel / HUMAN / AWS WAF（仅 CloudFront）；签名方含 OpenAI / Google（实验性子集，**Googlebot 主索引爬虫尚未签名**）/ Shopify / Amazon。**Cloudflare 2026-07-01 术语变更**：旧 "verified bot" → **`direct`**，旧 "signed agent" → **`intermediary`**。
-
-**厂商无关决策路径**：识别厂商 → 识别层级 → 问"这个厂商的主要向量是什么" → **只修一个变量** → 重新测量 → 检查商业闸门。最常见的错误是一次改指纹、改出口、改行为三件事，然后不知道哪一项起了作用。
-
-**引用纪律**：本文所有厂商规模数字均为厂商自述或方法未公开的商业数据库口径，**不可作为中立事实**。可引用的中立数据只有 W3Techs（方法公开）与 arXiv 论文（数据集已发布 Zenodo）。标注为 unverified 的条目包括：Forrester Wave 完整分档（付费墙）、Cloudflare "19 个 Verified AI Agent / 84% / 57.5%"、AWS WAF Web Bot Auth 标签、Content Signals 域名数、Imperva cookie 溢出绕过（需按当前版本复验）、BotStopper 高级指纹（路线图未发布）。

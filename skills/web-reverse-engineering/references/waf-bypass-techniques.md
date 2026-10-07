@@ -7,7 +7,7 @@ Practical techniques for bypassing Web Application Firewalls (WAF) including Clo
 | WAF Provider | Primary Defense | Cookie Names | Bypass Difficulty |
 |--------------|----------------|--------------|-------------------|
 | Cloudflare | JS challenge + TLS fingerprint | `cf_clearance`, `__cf_bm` | Medium |
-| Aliyun (阿里云) | Sliding CAPTCHA + cookie challenges | `acw_tc`, `acw_sc__v2`, `cdn_sec_tc` | Medium-High |
+| Aliyun | Sliding CAPTCHA + cookie challenges | `acw_tc`, `acw_sc__v2`, `cdn_sec_tc` | Medium-High |
 | Akamai | Bot Manager with device fingerprinting | `_abck`, `bm_sz` | High |
 | DataDome | Behavioral analysis + device fingerprinting | `datadome` | High |
 | Imperva (Incapsula) | Progressive challenges | `incap_ses_*`, `visid_incap_*` | Medium |
@@ -118,7 +118,7 @@ async def wait_for_waf_ready(page, timeout_ms=30000):
         const text = document.body?.innerText || '';
         
         // Detect common WAF challenge text
-        const blocked = /请进行验证|为了更好的访问体验|访问受限|Access denied|verify you are human|checking your browser|just a moment/i.test(text);
+        const blocked = /\u8bf7\u8fdb\u884c\u9a8c\u8bc1|\u4e3a\u4e86\u66f4\u597d\u7684\u8bbf\u95ee\u4f53\u9a8c|\u8bbf\u95ee\u53d7\u9650|Access denied|verify you are human|checking your browser|just a moment/i.test(text);
         if (blocked) return false;
         
         // Detect visible CAPTCHA elements
@@ -265,7 +265,7 @@ async with AsyncSession(impersonate='chrome110') as session:
 - ❌ Missing Sec-Fetch-* headers
 - ❌ Datacenter IP ranges (AWS, GCP, Azure)
 
-### Aliyun (阿里云) WAF
+### Aliyun WAF
 
 **Challenge type**: Sliding CAPTCHA (`acw_sc__v2` challenge) or pure cookie challenge (`acw_tc`)
 

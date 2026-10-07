@@ -99,10 +99,10 @@ GET /gradio_api/call/{function_name}/{event_id}
 Gradio creates temp WAV, returns path:
 ```python
 # Backend returns
-return "成功!", (22050, audio_numpy), "耗时 Xs"
+return "success!", (22050, audio_numpy), "elapsed Xs"
 
 # Gradio postprocess → /tmp/gradio/xxx.wav → returns path string
-# API response: ["成功!", "/file=/tmp/gradio/xxx.wav", "耗时 Xs"]
+# API response: ["success!", "/file=/tmp/gradio/xxx.wav", "elapsed Xs"]
 ```
 
 Download: `GET {base_url}/file=/tmp/gradio/xxx.wav`
@@ -126,7 +126,7 @@ Result: response contains `data:audio/wav;base64,...` instead of file path. Pars
 
 No monkeypatch, no API wrapping — returns raw tuple:
 ```python
-return "生成成功!", (22050, audio), f"耗时 {t}s"
+return "generated!", (22050, audio), f"elapsed {t}s"
 ```
 
 The REST API response wraps this in standard Gradio format (file path in `data[1]`).
@@ -137,10 +137,10 @@ When wrapping a Gradio Space with many dropdown choices (e.g., 804 speakers):
 
 ```python
 # 1. Extract from config
-choices = component["choices"]  # ["神里绫华（龟龟）", "派蒙", ...]
+choices = component["choices"]  # ["Kamisato Ayaka", "Paimon", ...]
 
 # 2. Build alias table
-aliases = {"ayaka": "神里绫华"}  # English → Chinese
+aliases = {"ayaka": "Kamisato Ayaka"}  # romanized alias -> display name
 
 # 3. Multi-layer resolution
 def resolve(name, choices, aliases):

@@ -1,40 +1,40 @@
-# 签名与加密参数逆向（Signature & Encrypted Parameter RE）
+# Signature & Encrypted Parameter RE
 
-Web 逆向中最常见的任务是「接口有一个/多个加密参数，需要本地生成」。本文给出系统化定位与复现方法。
+The most common task in web reverse engineering is "an endpoint carries one or more encrypted parameters that have to be generated locally". This document gives a systematic method for locating and reproducing them.
 
-## 定位流程（先定位，再复现）
+## Locating workflow (locate first, then reproduce)
 
 ```text
-1. 抓包，标记所有可疑参数（无规律长串、hex、base64、短时间戳、递增 ID）
-2. 判断参数数量与关联性（一个还是多个？是否互相依赖？）
-3. 全局搜索参数名 → 若无结果，说明被混淆（见下）
-4. 打 XHR/fetch 断点，回溯调用栈找到生成点
-5. 判断加密类型（见「算法识别」）
-6. 选择复现路线：扣代码 / 补环境 / RPC
+1. Capture traffic and flag every suspicious parameter (irregular long strings, hex, base64, short timestamps, incrementing IDs)
+2. Determine how many parameters there are and how they relate (one or several? do they depend on each other?)
+3. Search the parameter name globally -> no result means it has been obfuscated (see below)
+4. Set an XHR/fetch breakpoint and walk back up the call stack to the generation point
+5. Determine the encryption type (see "Algorithm identification")
+6. Pick a reproduction route: code extraction / environment simulation / RPC
 ```
 
-### 搜索不到参数名时的四种手段
+### Four techniques when the parameter name cannot be found
 
-参数名被混淆是常态（如极验对每个关键参数都做了替换）。可选：
+Obfuscated parameter names are the norm (GeeTest, for example, replaces every key parameter). Options:
 
-1. **堆栈慢慢调试**——最原始但最可靠
-2. **手写 AST 还原混淆代码**
-3. **通过 AST 内存漫游定位**
-4. **拿在线工具解混淆后再考虑**
+1. **Step through the stack slowly** — the most primitive but the most reliable
+2. **Hand-write an AST pass to restore the obfuscated code**
+3. **Locate it by AST memory roaming**
+4. **Run it through an online deobfuscator, then reconsider**
 
-推荐组合：先变量名去混淆 → 把 JS 存本地 → 开启本地替换（Local Overrides）→ 此时就能搜关键词和调试了。
+Recommended combination: deobfuscate variable names first -> save the JS locally -> enable Local Overrides -> at that point you can search for keywords and debug.
 
-### 断点选择
+### Breakpoint selection
 
-| 目标 | 断点位置 |
+| Target | Breakpoint location |
 |---|---|
-| 请求参数 | `XMLHttpRequest.prototype.send` / `XMLHttpRequest.prototype.setRequestHeader` / `window.fetch` |
-| Cookie 生成 | `document.cookie` 的 setter |
-| 指纹生成 | 特征参数名所在函数的入口 |
-| 轨迹相关 | 鼠标/触摸事件监听器 |
+| Request parameters | `XMLHttpRequest.prototype.send` / `XMLHttpRequest.prototype.setRequestHeader` / `window.fetch` |
+| Cookie generation | the setter of `document.cookie` |
+| Fingerprint generation | entry of the function where the characteristic parameter name lives |
+| Trajectory-related | mouse / touch event listeners |
 
 ```js
-// XHR 参数拦截：打印每次请求的完整参数
+// XHR parameter interception: log the full parameters of every request
 const XHR_open = XMLHttpRequest.prototype.open;
 const XHR_send = XMLHttpRequest.prototype.send;
 XMLHttpRequest.prototype.open = function (method, url) {
@@ -47,93 +47,93 @@ XMLHttpRequest.prototype.send = function (body) {
 };
 ```
 
-## 算法识别
+## Algorithm identification
 
-### crypto-js 特征
+### crypto-js signatures
 
-**重要状态**：crypto-js 已**停止维护**。README 原文："Active development of CryptoJS has been discontinued. This library is no longer maintained."
+**Important status**: crypto-js is **officially discontinued**. README wording: "Active development of CryptoJS has been discontinued. This library is no longer maintained."
 
-**模块清单（可直接作指纹字典）**：
+**Module list (usable directly as a fingerprint dictionary)**:
 
-| 类别 | 模块名 |
+| Category | Module names |
 |---|---|
-| 核心 | `core`、`x64-core`、`lib-typedarrays` |
-| 摘要 | `md5`、`sha1`、`sha256`、`sha224`、`sha512`、`sha384`、`sha3`、`ripemd160` |
-| HMAC | `hmac-md5`、`hmac-sha1`、`hmac-sha256`、`hmac-sha224`、`hmac-sha512`、`hmac-sha384`、`hmac-sha3`、`hmac-ripemd160` |
-| KDF | `pbkdf2`、`evpkdf` |
-| 密码 | `aes`、`tripledes`、`rc4`、`rabbit`、`rabbit-legacy` |
-| 格式 | `format-openssl`、`format-hex` |
-| 编码 | `enc-latin1`、`enc-utf8`、`enc-hex`、`enc-utf16`、`enc-base64` |
-| 模式 | `mode-cfb`、`mode-ctr`、`mode-ctr-gladman`、`mode-ofb`、`mode-ecb`（**CBC 是默认，故无独立模块**） |
-| 填充 | `pad-pkcs7`（默认）、`pad-ansix923`、`pad-iso10126`、`pad-iso97971`、`pad-zeropadding`、`pad-nopadding` |
+| Core | `core`, `x64-core`, `lib-typedarrays` |
+| Digest | `md5`, `sha1`, `sha256`, `sha224`, `sha512`, `sha384`, `sha3`, `ripemd160` |
+| HMAC | `hmac-md5`, `hmac-sha1`, `hmac-sha256`, `hmac-sha224`, `hmac-sha512`, `hmac-sha384`, `hmac-sha3`, `hmac-ripemd160` |
+| KDF | `pbkdf2`, `evpkdf` |
+| Ciphers | `aes`, `tripledes`, `rc4`, `rabbit`, `rabbit-legacy` |
+| Formats | `format-openssl`, `format-hex` |
+| Encodings | `enc-latin1`, `enc-utf8`, `enc-hex`, `enc-utf16`, `enc-base64` |
+| Modes | `mode-cfb`, `mode-ctr`, `mode-ctr-gladman`, `mode-ofb`, `mode-ecb` (**CBC is the default, so there is no standalone module**) |
+| Padding | `pad-pkcs7` (default), `pad-ansix923`, `pad-iso10126`, `pad-iso97971`, `pad-zeropadding`, `pad-nopadding` |
 
-**识别特征**：
+**Identifying traits**:
 
-- 调用签名 `CryptoJS.AES.encrypt(msg, key, {iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7})`
-- 密文是 `WordArray`，取 `CipherParams.ciphertext`
-- **OpenSSL 格式密文以 ASCII `Salted__`（8 字节）开头 + 8 字节 salt**；密钥由 **EVPKDF** 派生（默认丢弃 192 words / 768 字节）
-- 输出转换 `.toString(CryptoJS.enc.Utf8)` / `.toString(CryptoJS.enc.Base64)` / `.toString(CryptoJS.enc.Hex)`
+- Call signature `CryptoJS.AES.encrypt(msg, key, {iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7})`
+- The ciphertext is a `WordArray`; read `CipherParams.ciphertext`
+- **OpenSSL-format ciphertext begins with the ASCII bytes `Salted__` (8 bytes) followed by an 8-byte salt**; the key is derived by **EVPKDF** (192 words / 768 bytes discarded by default)
+- Output conversion `.toString(CryptoJS.enc.Utf8)` / `.toString(CryptoJS.enc.Base64)` / `.toString(CryptoJS.enc.Hex)`
 
-**版本陷阱**：
+**Version traps**:
 
-- **3.2.0 有 CRITICAL BUG，README 明确标注 "DO NOT USE THIS VERSION"**
-- 4.0.0 起 `Math.random()` 被原生 crypto 随机数替换
-- 4.1.0 新增 URL-safe base64 变体
-- 4.2.0 变更 PBKDF2 默认哈希与迭代次数，新增 Blowfish 与自定义 KDF Hasher
+- **3.2.0 has a CRITICAL BUG; the README explicitly marks it "DO NOT USE THIS VERSION"**
+- From 4.0.0 onward, `Math.random()` was replaced by the native crypto random source
+- 4.1.0 added a URL-safe base64 variant
+- 4.2.0 changed the PBKDF2 default hash and iteration count, and added Blowfish and a custom KDF Hasher
 
-### 国密 SM2 / SM3 / SM4
+### Chinese national cryptographic standards (SM2 / SM3 / SM4)
 
 ```js
 const sm2 = require('sm-crypto').sm2
-let keypair = sm2.generateKeyPairHex()          // publicKey(130位) / privateKey
-sm2.compressPublicKeyHex(publicKey)             // 压缩到 66 位
-const cipherMode = 1                            // 1 = C1C3C2（默认），0 = C1C2C3
+let keypair = sm2.generateKeyPairHex()          // publicKey (130 chars) / privateKey
+sm2.compressPublicKeyHex(publicKey)             // compress to 66 chars
+const cipherMode = 1                            // 1 = C1C3C2 (default), 0 = C1C2C3
 sm2.doEncrypt(msg, publicKey, cipherMode)
 sm2.doDecrypt(encryptData, privateKey, cipherMode)
 
 const sm3 = require('sm-crypto').sm3
-sm3('abc')                                      // 杂凑
-sm3('abc', { key: '<hex 或字节数组>' })          // HMAC
+sm3('abc')                                      // digest
+sm3('abc', { key: '<hex or byte array>' })      // HMAC
 
 const sm4 = require('sm-crypto').sm4
-sm4.encrypt(msg, key)                           // 默认输出 hex，默认 pkcs#7
+sm4.encrypt(msg, key)                           // hex output by default, pkcs#7 by default
 sm4.encrypt(msg, key, { padding: 'none', output: 'array' })
 sm4.encrypt(msg, key, { mode: 'cbc', iv: '<32 hex>' })
 ```
 
-**逆向识别要点（README 明确记载的坑）**：
+**Reverse-engineering identification points (pitfalls the README documents explicitly)**:
 
-- **SM2 密文解密时会自动补 `04` 前缀**。若密文来自其它工具且已含 `04`，**必须手动去除再传入**——这是判定「密文来源工具」的关键线索
-- SM2 签名 `hash` 参数默认 `true`（做 SM3 杂凑）；纯签名需显式 `hash: false`。默认 `userId` 为 `1234567812345678`
-- `der: true` 启用 DER 编解码；`pointPool` 可传入预生成椭圆曲线点加速
-- SM4 key 必须 128 位；传 `pkcs#5` 也会走 pkcs#7 填充
+- **SM2 decryption automatically prepends the `04` prefix.** If the ciphertext comes from another tool and already contains `04`, **it must be stripped manually before being passed in** — this is a key clue for identifying which tool produced the ciphertext
+- The SM2 signature `hash` parameter defaults to `true` (it applies an SM3 digest); pure signing requires `hash: false` explicitly. The default `userId` is `1234567812345678`
+- `der: true` enables DER encode/decode; `pointPool` accepts pre-generated elliptic-curve points for speed
+- The SM4 key must be 128 bits; passing `pkcs#5` also goes through pkcs#7 padding
 
-### 魔改 Base64
+### Modified / permuted Base64
 
-**机制**：分两种情况——① 直接定义新编码 table；② 动态生成新编码 table。两种情况均可通过「还原出编码时使用的 table」来等价解码。
+**Mechanism**: two cases — (1) a new encoding table is defined directly; (2) the new encoding table is generated dynamically. Both can be decoded equivalently by "recovering the table that was used at encode time".
 
-**识别与还原**：
+**Identification and recovery**:
 
-- **静态特征**：源码中出现 64 字符长字符串常量，且字符集为 RFC 4648 字母表 `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/` 的**置换**（URL-safe 变体为 `+/` → `-_` 且省略 `=`）
-- **动态特征**：table 由 `charCodeAt` / 位运算在运行时拼装（需在生成后 dump）
-- **还原**：提取 table → 构建反向映射 → 解码
-- **快速启发式**：尝试标准 base64 解码，若得到乱码但**长度合规（原长 × 3/4）**，则高度可疑为字母表置换
+- **Static trait**: a 64-character string constant appears in the source, and its character set is a **permutation** of the RFC 4648 alphabet `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/` (the URL-safe variant is `+/` -> `-_` with `=` omitted)
+- **Dynamic trait**: the table is assembled at runtime from `charCodeAt` / bitwise operations (you must dump it after it is generated)
+- **Recovery**: extract the table -> build the inverse mapping -> decode
+- **Quick heuristic**: try a standard base64 decode; if you get garbage but the **length is consistent (original length × 3/4)**, an alphabet permutation is highly likely
 
-### RSA 公钥提取
+### RSA public-key extraction
 
-**jsencrypt** 是 Web 端最常见的 RSA 实现。
+**jsencrypt** is the most common RSA implementation on the web.
 
-- 定位："A tiny (18.5 kB gzip), zero-dependency, Javascript library to perform OpenSSL RSA Encryption, Decryption, and Key Generation"
-- 调用：`new JSEncrypt()` → `setPublicKey(pemString)` / `setPrivateKey(pemString)`；**设私钥时公钥会自动派生**
-- `encrypt()` 返回 base64 字符串；`decrypt()` 失败返回 `false`
-- 签名：`signSha256(data)` / `verifySha256(data, signature)`；支持哈希 `md2`、`md5`、`sha1`、`sha224`、`sha256`、`sha384`、`sha512`、`ripemd160`
-- OAEP：`encryptOAEP(data)`
-- 支持格式：私钥 PKCS#1（`-----BEGIN RSA PRIVATE KEY-----`）、公钥 PKCS#8（`-----BEGIN PUBLIC KEY-----`）
-- 底层：Tom Wu 的 jsbn（核心算法未改动）
+- Positioning: "A tiny (18.5 kB gzip), zero-dependency, Javascript library to perform OpenSSL RSA Encryption, Decryption, and Key Generation"
+- Usage: `new JSEncrypt()` -> `setPublicKey(pemString)` / `setPrivateKey(pemString)`; **setting the private key derives the public key automatically**
+- `encrypt()` returns a base64 string; `decrypt()` returns `false` on failure
+- Signing: `signSha256(data)` / `verifySha256(data, signature)`; supported hashes are `md2`, `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `ripemd160`
+- OAEP: `encryptOAEP(data)`
+- Supported formats: private key PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`), public key PKCS#8 (`-----BEGIN PUBLIC KEY-----`)
+- Under the hood: Tom Wu's jsbn (the core algorithms are unchanged)
 
-**PEM 组件 ↔ jsbn 变量映射表**（逆向时直接对照内存对象）：
+**PEM component ↔ jsbn variable mapping table** (compare directly against the in-memory object while reversing):
 
-| PEM 组件 | jsbn 变量 |
+| PEM component | jsbn variable |
 |---|---|
 | modulus | `n` |
 | public exponent | `e` |
@@ -144,67 +144,67 @@ sm4.encrypt(msg, key, { mode: 'cbc', iv: '<32 hex>' })
 | exponent2 | `dmq1` |
 | coefficient | `coeff` |
 
-**公钥提取实操**：
+**Public-key extraction in practice**:
 
-1. 源码中 grep `BEGIN PUBLIC KEY` / `BEGIN RSA PRIVATE KEY`
-2. 运行时 Hook `JSEncrypt.prototype.setPublicKey` / `setPrivateKey` 打印入参
-3. PEM 为 base64，可直接解析出 `n` / `e`
-4. 密钥来源常见于接口返回（如 `GET Home/Form` 返回 JSON 中的 `RSAPublicKey`）
+1. grep the source for `BEGIN PUBLIC KEY` / `BEGIN RSA PRIVATE KEY`
+2. Hook `JSEncrypt.prototype.setPublicKey` / `setPrivateKey` at runtime and print the arguments
+3. The PEM body is base64, so `n` / `e` can be parsed out directly
+4. The key commonly arrives from an API response (e.g. `RSAPublicKey` in the JSON returned by `GET Home/Form`)
 
-## 签名结构模式
+## Signature structure patterns
 
-| 模式 | 特征 | 示例 |
+| Pattern | Trait | Example |
 |---|---|---|
-| 纯摘要 | 定长 hex，32/40/64 字符 | `sign = md5(params + salt)` |
-| 摘要 + 盐 | 同上但需找 salt | salt 常硬编码或从接口取 |
-| 对称加密 | base64 或 hex，长度随明文增长 | AES/DES/SM4 |
-| 非对称加密 | 长度固定（等于密钥长度） | RSA/SM2 |
-| 混合 | **对称密文 + 非对称加密的密钥**拼接 | `w = AES(data) + RSA(key)`（极验） |
-| 时间戳绑定 | 每次变化，短时间窗口 | `_ts`、`nonce`、`timestamp` |
-| 递增序列 | 单调递增 | `subsid`、`seq` |
+| Pure digest | Fixed-length hex, 32/40/64 characters | `sign = md5(params + salt)` |
+| Digest + salt | Same as above, but the salt has to be found | the salt is usually hard-coded or fetched from an API |
+| Symmetric encryption | base64 or hex, length grows with the plaintext | AES/DES/SM4 |
+| Asymmetric encryption | Fixed length (equal to the key length) | RSA/SM2 |
+| Hybrid | **symmetric ciphertext + asymmetrically encrypted key** concatenated | `w = AES(data) + RSA(key)` (GeeTest) |
+| Timestamp binding | Changes every time, short time window | `_ts`, `nonce`, `timestamp` |
+| Incrementing sequence | Monotonically increasing | `subsid`, `seq` |
 
-**混合模式是中文风控的主流**：极验三代/四代、数美 v4 都是这个结构。识别方法：把参数按长度切分，若前段长度随内容变化、后段长度固定，则为混合模式。
+**The hybrid pattern dominates Chinese risk control**: GeeTest v3/v4 and Shumei v4 all use this structure. Identification method: split the parameter by length — if the leading segment's length varies with the content and the trailing segment has a fixed length, it is the hybrid pattern.
 
-## 参数排序与拼接陷阱
+## Parameter ordering and concatenation pitfalls
 
-签名算法中参数顺序常被混淆，需注意：
+In signing algorithms the parameter order is often obfuscated; check:
 
-- 是否按 key 字典序排序（`Object.keys(params).sort()`）
-- 是否过滤空值
-- 是否包含 URL 路径与 HTTP method
-- 是否包含时间戳与随机数
-- 是否对特殊字符做 URL 编码
+- Whether keys are sorted lexicographically (`Object.keys(params).sort()`)
+- Whether empty values are filtered out
+- Whether the URL path and the HTTP method are included
+- Whether a timestamp and a random number are included
+- Whether special characters are URL-encoded
 
-**调试方法**：构造两组仅差一个参数值的请求，对比签名差异，可反推拼接内容。
+**Debugging method**: build two requests that differ by exactly one parameter value, compare the signatures, and back out what is being concatenated.
 
-## 时间戳与 nonce
+## Timestamp and nonce
 
-| 字段 | 常见处理 |
+| Field | Common handling |
 |---|---|
-| 时间戳 | 秒 vs 毫秒；是否为字符串 |
-| 时区 | 极验四代要求 `+08:00` 格式的 ISO 字符串 |
-| nonce | 长度与字符集（hex / base64 / 数字） |
-| 过期 | 服务端校验窗口常为 5–30 分钟 |
+| Timestamp | seconds vs milliseconds; whether it is a string |
+| Timezone | GeeTest v4 requires an ISO string in `+08:00` format |
+| nonce | length and character set (hex / base64 / digits) |
+| Expiry | the server-side validation window is typically 5–30 minutes |
 
-## 复现路线选择
+## Choosing a reproduction route
 
-| 路线 | 适用 | 成本 | 风险 |
+| Route | Fits | Cost | Risk |
 |---|---|---|---|
-| **扣代码** | 算法独立、依赖少 | 中 | 站点更新即失效 |
-| **补环境** | 算法依赖浏览器环境 | 中低 | 需处理检测点 |
-| **RPC 远程调用** | 算法复杂、请求量低 | 低（首次） | 吞吐低 |
-| **纯算法重写** | 需高吞吐、长期维护 | 高 | 需完整理解 |
+| **Code extraction** | self-contained algorithm, few dependencies | medium | breaks as soon as the site updates |
+| **Environment simulation** | the algorithm depends on the browser environment | medium-low | detection points have to be handled |
+| **RPC remote call** | complex algorithm, low request volume | low (first time) | low throughput |
+| **Pure algorithm rewrite** | needs high throughput and long-term maintenance | high | requires complete understanding |
 
-决策依据：**先问请求量**。日均 < 1 万次 → RPC 足够；> 10 万次 → 必须纯算法。
+Decision rule: **ask about the request volume first**. Under 10,000 requests/day -> RPC is enough; over 100,000 -> a pure algorithm is mandatory.
 
-## 来源
+## Sources
 
-- 极验参数定位四手段：https://cloud.tencent.com/developer/article/1971174
-- 极验反混淆与参数还原：https://github.com/yanglbme/geetest-crack
-- 极验完整请求链与 w 结构：https://www.cnblogs.com/zgq123456/articles/15266990.html
-- crypto-js 模块与版本：https://github.com/brix/crypto-js
-- sm-crypto 用法与陷阱：https://github.com/JuneAndGreen/sm-crypto
-- 魔改 Base64 分析：https://bbs.kanxue.com/thread-251248.htm
-- jsencrypt 与 PEM 映射：https://github.com/travist/jsencrypt
-- 数美 v4 加密结构：https://cloud.tencent.com/developer/article/2475504
-- 同盾 p1~p9 与算法组合：https://cloud.tencent.com/developer/article/2501583
+- Four techniques for locating GeeTest parameters: https://cloud.tencent.com/developer/article/1971174
+- GeeTest deobfuscation and parameter recovery: https://github.com/yanglbme/geetest-crack
+- GeeTest's full request chain and the `w` structure: https://www.cnblogs.com/zgq123456/articles/15266990.html
+- crypto-js modules and versions: https://github.com/brix/crypto-js
+- sm-crypto usage and pitfalls: https://github.com/JuneAndGreen/sm-crypto
+- Analysis of modified Base64: https://bbs.kanxue.com/thread-251248.htm
+- jsencrypt and the PEM mapping: https://github.com/travist/jsencrypt
+- Shumei v4 encryption structure: https://cloud.tencent.com/developer/article/2475504
+- Tongdun p1–p9 and the algorithm combination: https://cloud.tencent.com/developer/article/2501583

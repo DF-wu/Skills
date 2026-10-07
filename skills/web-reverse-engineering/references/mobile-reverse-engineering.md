@@ -26,7 +26,7 @@ Target is a mobile app
   -> App uses Hermes (React Native)?
      -> hbctool (only HBC 59/62/74/76)
      -> hermes-dec for other versions
-  -> App is hardened (加壳)?
+  -> App is hardened (packed)?
      -> Identify shell generation, then use the matching unpacker
      -> See the hardening table in cn-risk-control-ecosystem.md
 ```
@@ -148,7 +148,7 @@ jarsigner -keystore debug.keystore patched.apk alias
 | `bytecode-viewer` | Aggregates multiple decompilers |
 | `frida-dexdump` | **Dumps decrypted DEX from a running app** — essential when the APK is packed |
 
-**Order matters**: if the APK is hardened (加壳), static analysis of the on-disk DEX gives you the shell, not the app. Dump the decrypted DEX at runtime first (`frida-dexdump`), then decompile that.
+**Order matters**: if the APK is hardened (packed), static analysis of the on-disk DEX gives you the shell, not the app. Dump the decrypted DEX at runtime first (`frida-dexdump`), then decompile that.
 
 ### Key things to find
 
@@ -242,13 +242,13 @@ Interceptor.attach(hook.implementation, {
 | **Unity** | `libunity.so`, `assets/bin/Data` | `Il2CppDumper` + `Il2CppInspector` | IL2CPP only, not Mono |
 | **Cordova/Ionic** | `www/` in assets | Plain unzip | No RE needed |
 
-## Hardening Shells (加固壳)
+## Hardening Shells
 
 | Generation | Examples | Approach |
 |---|---|---|
-| First (整体DEX加密) | early 梆梆/爱加密 | `frida-dexdump` after app start |
-| Second (抽取壳, 函数级) | 梆梆企业版, 娜迦 | Needs function-level dump, not whole-DEX |
-| Third (VMP + 自定义解释器) | 顶象, 几维 | Native-level analysis; treat as an L6 problem |
+| First (whole-DEX encryption) | early Bangcle / Ijiami | `frida-dexdump` after app start |
+| Second (extraction shell, function-level) | Bangcle Enterprise, Nagain | Needs function-level dump, not whole-DEX |
+| Third (VMP + custom interpreter) | Dingxiang, Kiwi | Native-level analysis; treat as an L6 problem |
 
 For third-generation shells, the cost/benefit is usually bad. Reconsider whether the mobile path is cheaper than the web path for the same data.
 

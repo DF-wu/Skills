@@ -74,13 +74,13 @@ This page maps common tools to their specialized or stealth-oriented replacement
 
 | Vendor | Route |
 |---|---|
-| 极验 (GeeTest) | Trajectory model + `w` parameter; environment simulation |
-| 阿里 (Aliyun) | `unsbox` / `hexXor` algorithm; fixed key |
-| 腾讯 TCaptcha | JSVMP + PoW; environment simulation |
-| 网易易盾 | Device fingerprint; official field list available |
-| 数美 shumei | AES-CBC with fixed iv `0102030405060708` |
-| 顶象 dingxiang | Dynamic JS + env checks |
-| 同盾 | `blackbox` / `p1`–`p9` |
+| GeeTest | Trajectory model + `w` parameter; environment simulation |
+| Aliyun | `unsbox` / `hexXor` algorithm; fixed key |
+| Tencent TCaptcha | JSVMP + PoW; environment simulation |
+| NetEase Yidun | Device fingerprint; official field list available |
+| Shumei | AES-CBC with fixed iv `0102030405060708` |
+| Dingxiang | Dynamic JS + env checks |
+| Tongdun | `blackbox` / `p1`–`p9` |
 
 See `captcha-vendors-cn.md` for parameters and `environment-simulation-jsvmp.md` for the simulation harness.
 
@@ -91,7 +91,7 @@ See `captcha-vendors-cn.md` for parameters and `environment-simulation-jsvmp.md`
 | API interception | Browser DevTools | `mitmproxy` / `HTTP Toolkit` | Mobile app + modification + scripting |
 | API → spec | Manual documentation | **`mitmproxy2swagger`** | Auto-derive OpenAPI from captured traffic |
 | GUI interception | `Charles Proxy` | `Burp Suite` / `Fiddler Everywhere` | Security testing + extensibility |
-| Mobile GUI proxy | Charles | **`Reqable`** (原 HttpCanary) | Mobile-first design |
+| Mobile GUI proxy | Charles | **`Reqable`** (formerly HttpCanary) | Mobile-first design |
 | Traffic analysis | Browser Network | `Wireshark` / `tcpdump` / `tshark` | Full packet-level inspection |
 | Mobile SSL pinning | None (blocked) | `Frida` / `objection` / **`ecapture`** | `ecapture` needs no CA at all |
 | Root-level mobile | `Frida` scripts | `Magisk` + **JingMatrix/Vector** | LSPosed official is stalled since 2023-10 |

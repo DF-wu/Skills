@@ -117,7 +117,7 @@ This is the most common waste of engineering time in this field. Do not reach fo
 | Situation | Better approach |
 |---|---|
 | API has a signed parameter | `signature-parameter-re.md` — browser does not help at all |
-| Target is 瑞数-protected | `ruishu-river-security.md` — per-site VM, browser automation is not the answer |
+| Target is RiverSecurity-protected | `ruishu-river-security.md` — per-site VM, browser automation is not the answer |
 | Challenge passes but API rejects | `cn-risk-control-ecosystem.md` — device fingerprint layer |
 | Response is a proof-of-work gate | Solve in native code (~50 MH/s vs ~0.5 MH/s) |
 | You only need JSON that an XHR returns | Replay the XHR directly |
