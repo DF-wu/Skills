@@ -6,14 +6,16 @@
 
 ### wxapkg 文件格式
 
+> **实测修正（重要）**：`firstMark` 与 `lastMark` **各占 1 字节，不是 2 字节**。很多流传的文档把两者写成 `Ushort`，照抄会直接导致 `struct.error: unpack requires a buffer of N bytes`。完整头部为 **18 字节**：`>B I I I B I`（1+4+4+4+1+4）。本技能自带的 `scripts/wxapkg_unpack.py` 使用修正后的布局，并已对合成样本实测通过。
+
 | 段 | 字段 | 类型 | 说明 |
 |---|---|---|---|
-| header | `firstMark` | Ushort | 固定 `0xBE`（190） |
-| header | `info` | Ulong | 作用未知，通常为 0 |
-| header | `indexInfoLength` | Ulong | 索引段长度 |
-| header | `bodyInfoLength` | Ulong | 数据段长度 |
-| header | `lastMark` | Ushort | 固定 `0xED`（237） |
-| header | `fileCount` | Ulong | 文件数目 |
+| header | `firstMark` | **1 字节** | 固定 `0xBE`（190） |
+| header | `info` | Ulong（4 字节） | 作用未知，通常为 0 |
+| header | `indexInfoLength` | Ulong（4 字节） | 索引段长度 |
+| header | `bodyInfoLength` | Ulong（4 字节） | 数据段长度 |
+| header | `lastMark` | **1 字节** | 固定 `0xED`（237） |
+| header | `fileCount` | Ulong（4 字节） | 文件数目（偏移 14） |
 | index | `nameLength` | Ulong | 文件名长度 |
 | index | `name` | Char[] | 长度 = `nameLength` |
 | index | `offset` | Ulong | 文件在数据段偏移 |
@@ -29,6 +31,8 @@ fileCount: 375
 ```
 
 解包工具第一步校验 `0xBE` / `0xED` 魔数，对不上即判定非 wxapkg 或已被加密改造。
+
+**安全提示**：索引段的 `name` 是**攻击者可控输入**。解析时必须拒绝 `..`、绝对路径、盘符与符号链接逃逸，否则解包恶意包会写到输出目录之外。`scripts/wxapkg_unpack.py` 内置该校验并已实测拦截 `../../pwned.txt`。
 
 ### 解包后的反直觉结构
 
@@ -197,6 +201,14 @@ python3 -m ttpkgUnpacker <dir>
 华为快应用 IDE 提供「打开 RPK」功能（菜单 `文件 > 打开 RPK`），属**官方正向工具**，不是反编译。
 
 **结论**：快应用的社区可核实路径是「获取 rpk + 平台预览版运行观察」，而非静态还原。
+
+## 未核实清单（引用前需自行验证）
+
+1. wxapkg 的包类型标识 `APP_V3` / `APP_V4` / `APP_SUBPACKAGE_V2` / `APP_PLUGIN_V1`
+2. 微信 4.0 之后的 xwechat 路径，以及 `pc_wxapkg_decrypt.exe -wxid ... -in __APP__.wxapkg` 的用法
+3. `wx.getRendererUserAgent`（基础库 2.26.3+）与 `wx.cloud.CDN`
+4. 支付宝小程序包后缀「`apkg`」（社区有不同说法）
+5. 快应用 rpk 的静态还原可能性——官方明确答复「不可以」，但这是**官方立场**而非技术证明；社区亦无公开可复现的静态还原方案
 
 ## 来源
 

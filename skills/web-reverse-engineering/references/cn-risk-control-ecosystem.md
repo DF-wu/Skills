@@ -18,6 +18,36 @@
 
 > 难点列为社区口径（来源：https://1997.pro/archives/1713518394359），非官方评级，仅作工作量预估参考。
 
+### 阿里云：三种植入场景（官方文档可核实）
+
+阿里的合规声明把 Cookie 植入分成三种**互不重叠的场景**，这比记 cookie 名有用得多——它告诉你**为什么**这个 cookie 会出现：
+
+| 场景 | 触发条件 | 植入的 Cookie | 用途 |
+|---|---|---|---|
+| **一** | 使用 CC 防护/扫描防护，且请求 Cookie 中**不含** `acw_tc` | `acw_tc`、`cdn_sec_tc` | 区分统计不同客户端，配合「统计对象为 session」的扫描防护与自定义频率规则判断 CC 攻击 |
+| **二** | 站点配置 Bot 管理高级模式并开启自动集成 Web SDK | `ssxmod_itna`、`ssxmod_itna2`、`ssxmod_itna3` | 采集指纹（含 HTTP 报文 `host` 字段、浏览器高度宽度等） |
+| **三** | WAF 自定义规则或 Bot 管理规则动作开启 JS 校验/滑块 | **JS 校验通过** → `acw_sc__v2`；**滑块通过** → `acw_sc__v3` | 验证通过凭证 |
+
+所以语义是：`acw_tc` = 客户端会话跟踪；`cdn_sec_tc` = 同类会话标记；`acw_sc__v2` = JS 挑战凭证；`acw_sc__v3` = 滑块凭证。**以上均为官方文档明示，不是社区推断。**
+
+官方补充的运维细节（对判断会话生命周期有用）：验证通过后默认 **1800 秒（30 分钟）** 内放行，可配 5–1800 秒；WAF 3.0 中跟踪 cookie（`acw_tc`）可配下发状态与 `secure`，**`SameSite` 暂不支持配置**；滑块 cookie（`acw_sc__v3`）可配 `secure`。
+
+来源：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions 、https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups 、https://help.aliyun.com/zh/edge-security-acceleration/esa/support/http-header
+
+### `acw_sc__v2` 的生成算法（社区可复现，非官方）
+
+多个独立来源一致：`acw_sc__v2 = hexXor(unsbox(arg1))`，其中 `arg1` 是**服务端 202 响应内联脚本给出的 40 位 hex 字符串，每次刷新页面都变**。
+
+- `unsbox` 是**字符重排**（按固定 40 元素置换表 `[15,35,29,24,33,16,1,38,10,9,19,31,40,27,22,23,25,13,6,11,39,18,20,8,14,21,32,26,2,30,7,4,17,5,3,28,34,37,12,36]` 还原顺序）
+- `hexXor` 是**固定密钥逐字节异或**，密钥 `3000176000856006061501533003690027800375`
+- 最终触发 `reload(arg2)`，`arg2` 即写入的 Cookie 值
+
+原版 JS 中该密钥以 `_0x5e8b26` 变量出现，且脚本开头会先做环境探测（`while (window["_phantom"] || window["__phantomas"]) {}`）——**这一行说明它至少在检测 PhantomJS 类无头环境**。
+
+**这是固定算法，不是动态 VM**，所以是阿里体系里最省力的一层。真正的难点在场景二（`ssxmod_itna*` 指纹）与滑块（`acw_sc__v3` 轨迹）。
+
+来源：https://www.cnblogs.com/wyh0923/p/16590583.html
+
 ## 分层决策：先判断「哪一层在拦你」
 
 这是中文风控逆向最容易走错的地方。**多数失败源于攻错了层**。
@@ -129,6 +159,10 @@ App 侧逆向常遇到加固壳，与 Web 风控是两条战线。
 ## 来源
 
 - 社区风控集合（难点/特征表）：https://1997.pro/archives/1713518394359
+- 阿里云 Cookie 植入场景（官方）：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/web-application-firewall-3-0-security-compliance-instructions
+- 阿里云防护对象设置（`acw_tc` 可配项）：https://help.aliyun.com/zh/waf/web-application-firewall-3-0/protected-objects-and-protected-object-groups
+- 阿里云 HTTP 头示例：https://help.aliyun.com/zh/edge-security-acceleration/esa/support/http-header
+- `acw_sc__v2` 算法（Python + JS 源码，含 `_0x5e8b26` 密钥）：https://www.cnblogs.com/wyh0923/p/16590583.html
 - 瑞数 4/5/6 代分析：https://www.cnblogs.com/ikdl/p/16453681.html 、https://www.cnblogs.com/ikdl/p/16647423.html 、https://www.cnblogs.com/ikdl/p/17778885.html
 - 瑞数 6 补环境实战：https://blog.csdn.net/2401_85468967/article/details/148050084
 - 数美 v4 设备 ID：https://cloud.tencent.com/developer/article/2475504
@@ -139,3 +173,16 @@ App 侧逆向常遇到加固壳，与 Web 风控是两条战线。
 - 顶象请求链与参数：https://www.cnblogs.com/boycelee/p/14270112.html
 - 加固三代划分：https://blog.csdn.net/weixin_39190897/article/details/114269713
 - 加固与脱壳实操：https://juejin.cn/post/7423310754952675379
+
+## 未核实清单（引用前需自行验证）
+
+以下条目在二手来源间存在出入或仅有一处出处，**不应作为事实陈述**：
+
+1. 瑞数「2^32 算法 × 2^24 变形 × 2^128 密钥」的量化说法——仅为厂商口径，无独立验证
+2. 腾讯云 WAF 独立的 JS 挑战 Cookie 名与算法
+3. 顶象错误码 `-10001` ~ `-10007`
+4. 同盾官方 Web SDK 的完整字段清单
+5. 各厂商加固特征 `so` 文件名清单（爱加密/梆梆/乐固/聚安全/易盾/通付盾/娜迦）——二手来源互相矛盾，实际识别应以现场 `lib/` 目录与加载流程为准
+6. 360 加固 `DtcLoader` / `/proc/self/maps` 反调试的完整链路
+7. `gee_guard` 作为 Cookie 名或参数名的用法（「GeeGuard 是设备指纹产品名」已核实，但「作为 cookie 参数出现」未核实）
+8. 极验部分版本把关键逻辑下沉 WASM（AES-CBC + HMAC-SHA256）
