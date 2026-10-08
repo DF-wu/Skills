@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nextcloud Use"
+  short_description: "Operate and administer a Nextcloud server: files, shares, search, occ, on-demand MCP"
+  default_prompt: "Use $nextcloud-use to work with my Nextcloud: run doctor, read the site notes, then manage files, shares, search or occ administration."

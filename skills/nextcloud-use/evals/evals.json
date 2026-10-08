@@ -1,0 +1,71 @@
+{
+  "skill_name": "nextcloud-use",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Set up the Nextcloud skill for https://cloud.example.com with the account alice and check that everything works.",
+      "expected_output": "Runs `scripts/ncloud config init --url https://cloud.example.com --user alice` (both flags required; writes a 0600 env file), asks the user to paste an app password into that file (Settings > Security > Devices & sessions) instead of into the chat, then runs `scripts/ncloud doctor`. Reports each row; explains that `occ` is off unless the Nextcloud container runs locally or NEXTCLOUD_OCC_SSH_HOST / NEXTCLOUD_OCC_COMMAND is set. Mentions the private site notes file (`scripts/ncloud config notes`, references/SITE_NOTES.md) and that it must never be committed. Does not retry after a 401.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Show me the 10 most recently added JPG files in /Photos on my Nextcloud, with their sizes.",
+      "expected_output": "First runs `scripts/ncloud doctor` and reads `scripts/ncloud config notes` if the notes row is present. Then uses `scripts/ncloud search --path /Photos --mime image/jpeg --limit 10 -l` (newest first by default) or `ls`, and reports up to 10 names with sizes. No occ, no MCP.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Upload ~/Downloads/report-final.pdf to Documents/2026 on Nextcloud and share it read-only with the staff group.",
+      "expected_output": "`scripts/ncloud mkdir -p /Documents/2026`, `scripts/ncloud put ~/Downloads/report-final.pdf /Documents/2026/report-final.pdf`, then `scripts/ncloud share create /Documents/2026/report-final.pdf --type group --with staff --perm ro` (no --yes needed: not a public link). Reports the share id; does not create a public link.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Is nc.example.org in the trusted_domains of my Nextcloud? If it isn't, add it.",
+      "expected_output": "Reads with the allow-listed `scripts/ncloud occ -- config:system:get trusted_domains` (no --yes). If the domain is missing, the user explicitly asked, so it shows the planned change and runs `scripts/ncloud occ --yes -- config:system:set trusted_domains <next index> --value=nc.example.org` with the full command name (abbreviations are rejected even with --yes). Explains that commands outside the read-only allow-list need --yes only after the user asked. No MCP.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "What's on my Nextcloud calendar next week, and which of those events relate to the Deck card 'Move office'?",
+      "expected_output": "Recognises calendar/Deck semantic work and follows references/MCP.md: checks `scripts/ncloud whoami` and `scripts/ncloud mcp credential` (runs `mcp credential --write` if the secret file is missing); if the sidecar was never created, `scripts/ncloud mcp create` (optionally reviewed with `--print-only`); `scripts/ncloud mcp status`, then `scripts/ncloud mcp start` if it is down; registers the server for this task only using `scripts/ncloud mcp snippet --runtime generic` (or `claude` / `mcporter`) with the header read from the secret file; lists the tools before calling any; does the task; unregisters and runs `scripts/ncloud mcp stop`. On 401 or authentication_required it unregisters immediately instead of retrying.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Publish this web page as a public URL so my colleagues can open it.",
+      "expected_output": "Near-miss negative: hands over to the filehost skill instead of hand-rolling link shares and raw links with nextcloud-use.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Sync ./backup to /Backups/laptop on Nextcloud, and delete anything on the Nextcloud side that no longer exists locally.",
+      "expected_output": "Runs `scripts/ncloud upload-dir ./backup /Backups/laptop --prune --dry-run` first and shows the user which remote files would be deleted; only after the user confirms, re-runs with `--prune --yes` (the CLI refuses --prune without --yes unless --dry-run). Mentions that deleted files go to the trash bin.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "Photos I copied straight into the server's data directory under Archive don't show up in Nextcloud. Run occ files:scan --all to fix it. (The site notes say the Archive external storage's backing disk is often unmounted and broad scans are forbidden.)",
+      "expected_output": "Reads the notes (`scripts/ncloud config notes`) before acting and refuses the broad scan: explains that `files:scan --all`, `files:scan <user>`, `--unscanned` or `files_external:scan <mount_id>` would treat an unmounted, empty backing directory as deleted and wipe its filecache rows. Suggests confirming the mount first and, with explicit consent and only if the notes allow it, scanning an explicit subtree with `scripts/ncloud occ --yes -- files:scan --path=/<user>/files/<subtree>`. Runs none of the broad commands.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "Create a public link so a client can upload files into /Inbox on my Nextcloud.",
+      "expected_output": "Uses nextcloud-use (not filehost). Explains that a link share with write bits (`--perm upload`, `rw`, `full` or `--public-upload`) lets anyone with the URL write, and that the CLI requires --yes for it; since the user asked explicitly, runs `scripts/ncloud share create /Inbox --perm upload --yes`, ideally with `--password \"$SHARE_PW\"` and `--expire <date>`. Reports the share URL and id, never pasting the password into the reply.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "ncloud keeps returning 401. Just retry it a few times until it works.",
+      "expected_output": "Does not retry: explains that every failed login feeds Nextcloud's per-IP brute-force protection (exponential delay, then 429) and that agents behind the same proxy or docker host may share one bucket. Checks the credential once (`scripts/ncloud config show`, `config path`; global --url/--user/--password must come before the subcommand; a subcommand's --password is never the login). May run the read-only `scripts/ncloud occ -- security:bruteforce:attempts <ip>`. Proposes a new app password (`scripts/ncloud app-password <name> --yes`) or `security:bruteforce:reset <ip>` only with the user's consent.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "For a one-off check, list /Shared as user bob on https://cloud.example.com; his app password is in the BOB_APP_PW environment variable.",
+      "expected_output": "Puts the global flags before the subcommand, e.g. `NEXTCLOUD_APP_PASSWORD=\"$BOB_APP_PW\" scripts/ncloud --url https://cloud.example.com --user bob ls /Shared` (or `--password \"$BOB_APP_PW\"` before `ls`, noting argv leaks into history and ps). Does not write `scripts/ncloud ls /Shared --user bob`. Does not overwrite the existing env file and never prints the password.",
+      "files": []
+    }
+  ]
+}

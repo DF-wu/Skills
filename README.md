@@ -12,6 +12,8 @@ implementation that actually does the work.
 | Skill | What it does | Ships |
 |---|---|---|
 | [`df-meta-mcp`](skills/df-meta-mcp/) | Drives the live dfmcp MetaMCP endpoint (121 tools): GitHub, TickTick, HackMD, Grok/Tavily web search, Context7 library docs, DeepWiki repo Q&A. | `scripts/dfmcp` |
+| [`nextcloud-use`](skills/nextcloud-use/) | Generic Nextcloud CLI configured entirely from env: WebDAV files, OCS shares/users/apps/search and raw links with an app password, guarded occ (docker exec, custom command or ssh), and an MCP sidecar created and loaded only on demand. | `scripts/ncloud` |
+| [`filehost`](skills/filehost/) | Publishes HTML pages, static sites and single assets as public URLs through Nextcloud raw links (`/raw/<token>`, Raw Fileserver app), with CSP presets, same-URL updates and verification. Needs `nextcloud-use`. | `scripts/filehost` |
 | [`new-api-manage`](skills/new-api-manage/) | Real operations against a [QuantumNous/new-api](https://github.com/QuantumNous/new-api) admin API — channels, tokens, users, options, models, vendors, subscriptions, deployments. | `scripts/newapi` |
 | [`web-reverse-engineering`](skills/web-reverse-engineering/) | Reverse-engineering playbook: scraping, API RE, mobile/binary RE, JS deobfuscation, anti-bot and WAF strategy, authenticated session mapping. | Python templates |
 | [`hackmd-browser-crud`](skills/hackmd-browser-crud/) | Manages HackMD notes via a cookie-backed browser session, avoiding the metered public API. | `scripts/hackmd-web-cli` |
@@ -56,6 +58,13 @@ ln -s ~/src/Skills/skills/df-meta-mcp ~/.claude/skills/df-meta-mcp
 
 Claude Code also reads `~/.claude/skills/`; most other agents take a directory
 of `SKILL.md` files the same way.
+
+`filehost` imports `nextcloud-use`'s `scripts/ncloud`, so install the two into the
+same skills directory (then configure with `scripts/ncloud config init --url ... --user ...`):
+
+```bash
+npx skills add DF-wu/Skills -s nextcloud-use -s filehost -g -a '*' -y
+```
 
 ## Building the tools
 

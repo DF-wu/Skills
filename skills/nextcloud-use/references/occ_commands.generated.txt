@@ -1,0 +1,312 @@
+check                                    check dependencies of the server environment
+completion                               Dump the shell completion script
+help                                     Display help for a command
+list                                     List commands
+setupchecks                              Run setup checks and output the results
+status                                   show some status information
+upgrade                                  run upgrade routines after installation of a new release. The release has to be installed before.
+activity:send-mails                      Sends the activity notification mails
+admin-delegation:add                     add setting delegation to a group
+admin-delegation:remove                  remove settings delegation from a group
+admin-delegation:show                    show delegated settings
+app:disable                              disable an app
+app:enable                               enable an app
+app:getpath                              Get an absolute path to the app directory
+app:install                              install an app
+app:list                                 List all available apps
+app:remove                               remove an app
+app:update                               update an app or all apps
+background:cron                          Use cron, ajax or webcron to run background jobs
+background-job:delete                    Remove a background job from database
+background-job:execute                   Execute a single background job manually
+background-job:list                      List background jobs
+background-job:worker                    Run a background job worker
+broadcast:test                           test the SSE broadcaster
+calendar:export                          Export calendar data from supported calendars to disk or stdout
+calendar:import                          Import calendar data to supported calendars from disk or stdin
+circles:check                            Checking your configuration
+circles:maintenance                      Clean stuff, keeps the app running
+circles:manage:config                    edit config/type of a Team
+circles:manage:create                    create a new team
+circles:manage:destroy                   destroy a circle by its ID
+circles:manage:details                   get details about a team by its ID
+circles:manage:edit                      edit displayName or description of a  Team
+circles:manage:join                      emulate a user joining a Team
+circles:manage:leave                     simulate a user joining a Team
+circles:manage:list                      listing current teams
+circles:manage:setting                   edit setting for a Team
+circles:members:add                      Add a member to a Team
+circles:members:details                  get details about a member by its ID
+circles:members:level                    Change the level of a member from a Team
+circles:members:list                     listing Members from a Team
+circles:members:remove                   remove a member from a team
+circles:members:search                   Change the level of a member from a Team
+circles:memberships                      index and display memberships for local and federated users
+circles:migrate:customgroups             
+circles:remote                           remote features
+circles:shares:files                     listing shares files
+circles:sync                             Sync Circles and Members
+circles:test                             testing some features
+config:app:delete                        Delete an app config value
+config:app:get                           Get an app config value
+config:app:set                           Set an app config value
+config:import                            Import a list of configs
+config:list                              List all configs
+config:preset                            Select a config preset
+config:system:delete                     Delete a system config value
+config:system:get                        Get a system config value
+config:system:set                        Set a system config value
+dav:absence:get                          
+dav:absence:set                          
+dav:clear-calendar-unshares              Clear calendar unshares for a user
+dav:clear-contacts-photo-cache           Clear cached contact photos
+dav:create-addressbook                   Create a dav addressbook
+dav:create-calendar                      Create a dav calendar
+dav:create-subscription                  Create a dav subscription
+dav:delete-calendar                      Delete a dav calendar
+dav:delete-subscription                  Delete a calendar subscription for a user
+dav:fix-missing-caldav-changes           Insert missing calendarchanges rows for existing events
+dav:list-addressbooks                    List all addressbooks of a user
+dav:list-calendar-shares                 List all calendar shares for a user
+dav:list-calendars                       List all calendars of a user
+dav:list-subscriptions                   List all calendar subscriptions for a user
+dav:move-calendar                        Move a calendar from an user to another
+dav:remove-invalid-shares                Remove invalid dav shares
+dav:retention:clean-up                   
+dav:send-event-reminders                 Sends event reminders
+dav:sync-birthday-calendar               Synchronizes the birthday calendar
+dav:sync-system-addressbook              Synchronizes users to the system addressbook
+db:add-missing-columns                   Add missing optional columns to the database tables
+db:add-missing-indices                   Add missing indices to the database tables
+db:add-missing-primary-keys              Add missing primary keys to the database tables
+db:convert-filecache-bigint              Convert the ID columns of the filecache to BigInt
+db:convert-mysql-charset                 Convert charset of MySQL/MariaDB to use utf8mb4
+db:convert-type                          Convert the Nextcloud database to the newly configured one
+db:schema:expected                       Export the expected database schema for a fresh installation
+db:schema:export                         Export the current database schema
+deck:calendar-toggle                     Enable or disable Deck calendar/tasks integration for all existing users. Users can still change their own setting afterwards. Only affects users that already exist at the time of execution.
+deck:export                              Export a JSON dump of user data
+deck:import                              Import data
+deck:transfer-ownership                  Change owner of deck boards
+encryption:change-key-storage-root       Change key storage root
+encryption:decrypt-all                   Disable server-side encryption and decrypt all files
+encryption:disable                       Disable encryption
+encryption:enable                        Enable encryption
+encryption:encrypt-all                   Encrypt all files for all users
+encryption:list-modules                  List all available encryption modules
+encryption:migrate-key-storage-format    Migrate the format of the keystorage to a newer format
+encryption:set-default-module            Set the encryption default module
+encryption:show-key-storage-root         Show current key storage root
+encryption:status                        Lists the current status of encryption
+federation:sync-addressbooks             Synchronizes addressbooks of all federated clouds
+federation:sync-calendars                Synchronize all incoming federated calendar shares
+files:cleanup                            Clean up orphaned filecache and mount entries
+files:copy                               Copy a file or folder
+files:delete                             Delete a file or folder
+files:get                                Get the contents of a file
+files:mount:list                         List of mounts for a user
+files:mount:refresh                      Refresh the list of mounts for a user
+files:move                               Move a file or folder
+files:object:delete                      Delete an object from the object store
+files:object:get                         Get the contents of an object
+files:object:info                        Get the metadata of an object
+files:object:list                        List all objects in the object store
+files:object:multi:rename-config         Rename an object store configuration and move all users over to the new configuration,
+files:object:multi:users                 Get the mapping between users and object store buckets
+files:object:orphans                     List all objects in the object store that don't have a matching entry in the database
+files:object:put                         Write a file to the object store
+files:put                                Write contents of a file
+files:recommendations:recommend          Shows recommended files for an account
+files:reminders                          List file reminders
+files:repair-tree                        Try and repair malformed filesystem tree structures (may be necessary to run multiple times for nested malformations)
+files:sanitize-filenames                 Renames files to match naming constraints
+files:scan                               rescan filesystem
+files:scan-app-data                      rescan the AppData folder
+files:transfer-ownership                 All files and folders are moved to another user - outgoing shares and incoming user file shares (optionally) are moved as well.
+files:windows-compatible-filenames       Enforce naming constraints for windows compatible filenames
+files_external:applicable                Manage applicable users and groups for a mount
+files_external:backends                  Show available authentication and storage backends
+files_external:config                    Manage backend configuration for a mount
+files_external:create                    Create a new mount configuration
+files_external:delete                    Delete an external mount
+files_external:dependencies              Show information about the backend dependencies
+files_external:export                    Export mount configurations
+files_external:import                    Import mount configurations
+files_external:list                      List configured admin or personal mounts
+files_external:notify                    Listen for active update notifications for a configured external mount
+files_external:option                    Manage mount options for a mount
+files_external:scan                      Scan an external storage for changed files
+files_external:verify                    Verify mount configuration
+files_fulltextsearch:configure           Configure the installation
+fulltextsearch:check                     Check the installation
+fulltextsearch:collection:delete         Delete collection
+fulltextsearch:collection:init           Initiate a collection
+fulltextsearch:collection:link           Link collection to a user
+fulltextsearch:collection:list           List collections
+fulltextsearch:configure                 Configure the installation
+fulltextsearch:document:index            index one specific document
+fulltextsearch:document:platform         Get document from index
+fulltextsearch:document:provider         Get document from index
+fulltextsearch:document:status           change the status on one specific document
+fulltextsearch:index                     Index files
+fulltextsearch:live                      Index files
+fulltextsearch:reset                     Reset index
+fulltextsearch:search                    Search something
+fulltextsearch:stop                      Stop all indexing
+fulltextsearch:test                      Testing the platform setup
+fulltextsearch_elasticsearch:configure   Configure the installation
+group:add                                Add a group
+group:adduser                            add a user to a group
+group:delete                             Remove a group
+group:info                               Show information about a group
+group:list                               list configured groups
+group:removeuser                         remove a user from a group
+groupfolders:create                      Create a new Team folder
+groupfolders:delete                      Delete Team folder
+groupfolders:expire                      Trigger expiry of versions and trashbin for files stored in group folders
+groupfolders:group                       Edit the groups that have access to a Team folder
+groupfolders:list                        List the configured Team folders
+groupfolders:permissions                 Configure advanced permissions for a configured Team folder
+groupfolders:quota                       Edit the quota of a configured Team folder
+groupfolders:rename                      Rename Team folder
+groupfolders:scan                        Scan a Team folder for outside changes
+groupfolders:trashbin:cleanup            Empty the Team folder trashbin
+info:file                                get information for a file
+info:file:space                          Summarize space usage of specified folder
+info:storage                             Get information a single storage
+info:storages                            List storages ordered by the number of files
+integration_onedrive:setup               Setup the OneDrive OAuth client credentials
+integration_onedrive:setup-user          Setup user OAuth tokens for OneDrive
+integration_onedrive:start-import        Start OneDrive file import for the given user
+integrity:check-app                      Check integrity of an app using a signature.
+integrity:check-core                     Check integrity of core code using a signature.
+integrity:sign-app                       Signs an app using a private key.
+integrity:sign-core                      Sign core using a private key.
+l10n:createjs                            Create javascript translation files for a given app
+log:file                                 manipulate logging backend
+log:manage                               manage logging configuration
+log:tail                                 Tail the nextcloud logfile
+log:watch                                Watch the nextcloud logfile
+mail:account:create-imap                 creates an IMAP mail account
+mail:account:create-jmap                 creates a JMAP mail account
+mail:account:debug                       Enable or Disable IMAP/SMTP debugging for an account
+mail:account:delete                      Delete an IMAP account
+mail:account:export                      Exports a user's mail account(s)
+mail:account:export-threads              Exports a user's account threads
+mail:account:sync                        Synchronize an IMAP account
+mail:account:test                        Test the connection for a mail account (IMAP or JMAP)
+mail:account:train                       Train the classifier of new messages
+mail:account:update-imap                 Update an IMAP mail account
+mail:account:update-jmap                 Update a JMAP mail account
+mail:clean-up                            clean up all orphaned data
+mail:mailbox:clear-cache                 Clear the cached messages of a mailbox. The mailbox will be resynced from IMAP on its next regular sync
+mail:mailbox:info                        Show information about a mailbox
+mail:mailbox:list                        List the mailboxes of an account
+mail:mailbox:unlock                      Release the sync locks of a mailbox
+mail:repair:system-autoresponders        Update sieve scripts of all accounts that follow the system out-of-office period
+mail:repair:tags                         Create default tags for account. If no account ID given, all tag entries will be repaired
+mail:tags:migration-jobs                 Creates a background job entry in the cron table for every user to migrate important labels to IMAP
+mail:thread                              Build threads from the exported data of an account
+maintenance:data-fingerprint             update the systems data-fingerprint after a backup is restored
+maintenance:mimetype:update-db           Update database mimetypes and update filecache
+maintenance:mimetype:update-js           Update mimetypelist.js
+maintenance:mode                         Show or toggle maintenance mode status
+maintenance:repair                       repair this installation
+maintenance:repair-share-owner           repair invalid share-owner entries in the database
+maintenance:theme:update                 Apply custom theme changes
+maintenance:update:htaccess              Updates the .htaccess file
+memcache:distributed:clear               Clear values from the distributed memcache
+memcache:distributed:delete              Delete a value in the distributed memcache
+memcache:distributed:get                 Get a value from the distributed memcache
+memcache:distributed:set                 Set a value in the distributed memcache
+memcache:redis:command                   Send raw redis command to the configured redis server
+metadata:get                             get stored metadata about a file, by its id
+migrations:preview                       Get preview of available DB migrations in case of initiating an upgrade
+notification:delete                      Delete a generated admin notification for the given user
+notification:generate                    Generate a notification for the given user
+notification:test-push                   Generate a notification for the given user
+notify_push:log                          Temporarily set the log level of the push server
+notify_push:metrics                      Get the metrics from the push server
+notify_push:reset                        Cancel all active connections to the push server
+notify_push:self-test                    Run self test for configured push server
+notify_push:setup                        Configure push server
+oauth2:add-client                        This command adds a new oauth2 client.
+oauth2:delete-client                     This command removes an existing oauth2 client.
+photos:albums:add                        Add specified photo to album
+photos:albums:create                     Create a new album for a user
+photos:update-1000-cities                Update the list of 1000 and more inhabitant cities
+preview:cleanup                          Removes existing preview files
+preview:generate                         generate a preview for a file
+preview:generate-all                     Generate previews for all images
+preview:pre-generate                     Pre-generate only images that have been added or changed since the last regular run
+preview:queue-stats                      Show statistics about the background preview generation job queue
+preview:reset-rendered-texts             Deletes all generated avatars and previews of text and md files
+richdocuments:activate-config            Activate config changes
+richdocuments:convert-bigint             Convert the ID columns of the richdocuments tables to BigInt
+richdocuments:install-fonts              Install default fonts
+richdocuments:update-empty-templates     Update empty template files
+router:list                              Find the target of a route or all routes of an app
+router:match                             Match a URL to the target route
+security:bruteforce:attempts             Show bruteforce attempts status for a given IP address
+security:bruteforce:reset                resets bruteforce attempts for given IP address
+security:certificates                    list trusted certificates
+security:certificates:export             export the certificate bundle
+security:certificates:import             import trusted certificate in PEM format
+security:certificates:remove             remove trusted certificate
+serverinfo:update-storage-statistics     Triggers an update of the counts related to storages used in serverinfo
+share:list                               List available shares
+sharing:cleanup-remote-storages          Cleanup shared storage entries that have no matching entry in the shares_external table
+sharing:delete-orphan-shares             Delete shares where the owner no longer has access to the file
+sharing:expiration-notification          Notify share initiators when a share will expire the next day.
+sharing:fix-owncloud-group-shares        Fix group share subshares left pending after renaming on an ownCloud-migrated instance
+sharing:fix-share-owners                 Fix owner of broken shares after transfer ownership on old versions
+snowflake:decode                         Decode Snowflake IDs used by Nextcloud
+support:report                           Generate a system report
+tag:add                                  Add new tag
+tag:delete                               delete a tag
+tag:edit                                 edit tag attributes
+tag:files:add                            Add a system-tag to a file or folder
+tag:files:delete                         Delete a system-tag from a file or folder
+tag:files:delete-all                     Delete all system-tags from a file or folder
+tag:list                                 list tags
+taskprocessing:task-type:set-enabled     Enable or disable a task type
+taskprocessing:task:cleanup              cleanup old tasks
+taskprocessing:task:get                  Display all information for a specific task
+taskprocessing:task:list                 list tasks
+taskprocessing:task:stats                get statistics for tasks
+taskprocessing:worker                    Run a dedicated worker for synchronous TaskProcessing providers
+text:reset                               Reset a text document session to the current file content
+theming:config                           Set theming app config values
+trashbin:cleanup                         Remove deleted files
+trashbin:expire                          Expires the users trashbin
+trashbin:restore                         Restore all deleted files according to the given filters
+trashbin:size                            Configure the target trashbin size
+twofactor_totp:cleanup                   Remove orphaned totp secrets
+twofactorauth:cleanup                    Clean up the two-factor user-provider association of an uninstalled/removed provider
+twofactorauth:disable                    Disable two-factor authentication for a user
+twofactorauth:enable                     Enable two-factor authentication for a user
+twofactorauth:enforce                    Enabled/disable enforced two-factor authentication
+twofactorauth:state                      Get the two-factor authentication (2FA) state of a user
+update:check                             Check for server and app updates
+user:add                                 adds an account
+user:auth-tokens:add                     Add app password for the named account
+user:auth-tokens:delete                  Deletes an authentication token
+user:auth-tokens:list                    List authentication tokens of an user
+user:clear-avatar-cache                  clear avatar cache
+user:delete                              deletes the specified user
+user:disable                             disables the specified user
+user:enable                              enables the specified user
+user:info                                show user info
+user:keys:verify                         Verify if the stored public key matches the stored private key
+user:lastseen                            shows when the user was logged in last time
+user:list                                list configured users
+user:profile                             Read and modify user profile properties
+user:report                              shows how many users have access
+user:resetpassword                       Resets the password of the named user
+user:setting                             Read and modify user settings
+user:sync-account-data                   sync user backend data to accounts table for configured users
+user:welcome                             Sends the welcome email
+versions:cleanup                         Delete versions
+versions:expire                          Expires the users file versions
+webhook_listeners:list                   Lists configured webhook listeners
+workflows:list                           Lists configured workflows

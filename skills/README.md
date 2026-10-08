@@ -28,11 +28,13 @@ Prompt-only skills carry just `SKILL.md` plus `references/`.
 
 ## Current active skills
 
-As of 2026-08-19, the active skill directories are:
+As of 2026-10-06, the active skill directories are:
 
 - `skills/df-meta-mcp/`
+- `skills/filehost/`
 - `skills/hackmd-browser-crud/`
 - `skills/new-api-manage/`
+- `skills/nextcloud-use/`
 - `skills/qwen3-asr-tts-hf2api/`
 - `skills/vits-tts-hf2api/`
 - `skills/web-reverse-engineering/`

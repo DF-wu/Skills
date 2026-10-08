@@ -1,0 +1,4 @@
+interface:
+  display_name: "Filehost"
+  short_description: "Publish pages, static sites and assets to a public URL via Nextcloud raw links"
+  default_prompt: "Use $filehost to publish this directory or file to a public URL on my Nextcloud (Raw Fileserver)."

@@ -29,3 +29,11 @@ session.json
 *.swp
 .idea/
 .vscode/
+
+# nextcloud-use / filehost credential material (never commit)
+mcp-basic.b64
+app-password
+*.basic
+*.apppw
+claude-mcp*.json
+nc-research/

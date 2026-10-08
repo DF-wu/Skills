@@ -1,0 +1,480 @@
+#!/usr/bin/env python3
+"""filehost — publish public web pages, static sites and single assets instantly through
+Nextcloud public link shares + the Raw Fileserver app (files_sharing_raw).
+
+Depends on the `nextcloud-use` skill: this script imports its scripts/ncloud module
+(found via $NEXTCLOUD_USE_CLI, the sibling skill directory, or the usual skills dirs).
+
+Pipeline (idempotent, re-run to update):
+  mkdir <root>/<name>  ->  find-or-create ONE read-only public link share  ->  enable raw link (+CSP)
+  ->  upload files (optional prune / <base> injection)  ->  verify over the public URL  ->  print URLs
+
+Public URL forms (Nextcloud core grants /raw root routes since 32.0.7 / 33.0.1):
+  https://<host>/raw/<token>/index.html   canonical page URL (relative links resolve correctly)
+  https://<host>/raw/<token>              serves index.html too, BUT relative links break (/raw/<token>/ is a 404)
+  https://<host>/raw/<token>/<path>       any file inside the published folder; folders serve their index.html
+A folder without index.html: /raw/<token> answers 200 application/json `null`, so `url` points at its first file.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sys
+import urllib.parse
+from pathlib import Path
+
+VERSION = "0.1.0"
+DEFAULT_ROOT = "/filehost"
+LABEL_PREFIX = "filehost:"
+HTML_EXT = {".html", ".htm", ".svg", ".xhtml"}
+
+
+# ----------------------------------------------------------------------------- locate nextcloud-use
+def find_ncloud() -> Path:
+    pinned = os.environ.get("NEXTCLOUD_USE_CLI")
+    if pinned:  # an explicit pin must exist; never fall back silently to another copy
+        p = Path(pinned).expanduser()
+        if not p.is_file():
+            sys.exit(f"error: NEXTCLOUD_USE_CLI={pinned} is not a file (fix the path or unset it)")
+        return p
+    here = Path(__file__).resolve()
+    cands = [here.parent.parent.parent / "nextcloud-use" / "scripts" / "ncloud"]  # sibling skill dir
+    home = Path.home()
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    bases = [home / ".agents" / "skills", home / ".claude" / "skills", home / ".codex" / "skills", home / ".cursor" / "skills",
+             home / ".gemini" / "skills", xdg / "opencode" / "skills"]
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        bases.insert(1, Path(os.environ["CLAUDE_CONFIG_DIR"]) / "skills")
+    for base in bases:
+        cands.append(base / "nextcloud-use" / "scripts" / "ncloud")
+    for c in cands:
+        if c.is_file():
+            return c
+    sys.exit("error: cannot find the nextcloud-use skill (scripts/ncloud). Install it into the same skills directory "
+             "as this skill, or set NEXTCLOUD_USE_CLI=/path/to/ncloud")
+
+
+def load_ncloud():
+    path = find_ncloud()
+    sys.dont_write_bytecode = True  # no __pycache__ inside the nextcloud-use skill dir
+    spec = importlib.util.spec_from_loader("ncloud", importlib.machinery.SourceFileLoader("ncloud", str(path)))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+nc = load_ncloud()
+
+
+# ----------------------------------------------------------------------------- helpers
+def die(msg, code=1):
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def log(msg):
+    print(msg, file=sys.stderr)
+
+
+def sanitize_name(name: str) -> str:
+    parts = []
+    for seg in name.strip("/").split("/"):
+        seg = re.sub(r"[^A-Za-z0-9._\-\u4e00-\u9fff]+", "-", seg).strip("-.")
+        if seg:
+            parts.append(seg)
+    if not parts:
+        die("empty site name after sanitizing")
+    return "/".join(parts)
+
+
+def site_path(root: str, name: str) -> str:
+    return nc.norm_path(f"{nc.norm_path(root)}/{name.strip('/')}")
+
+
+def find_link_shares(c, path: str) -> list[dict]:
+    """Link shares for a path (owned by the configured user), with raw state."""
+    try:
+        doc = nc.raw_list_for_path(c, path)
+    except nc.NcError as e:
+        if e.status == 404:
+            return []
+        raise
+    return doc.get("shares", [])
+
+
+def ensure_share(c, path: str, name: str, expire=None, dry_run=False) -> dict:
+    shares = find_link_shares(c, path)
+    if shares:
+        enabled = [s for s in shares if s.get("enabled")]
+        chosen = (enabled or shares)[0]
+        return {"shareId": chosen["shareId"], "token": chosen["token"], "rawUrl": chosen["rawUrl"], "created": False}
+    if dry_run:
+        return {"shareId": None, "token": "<new-token>", "rawUrl": f"{c.cfg.url}/raw/<new-token>", "created": True}
+    data = {"path": path, "shareType": 3, "permissions": 1, "label": f"{LABEL_PREFIX}{name}"}
+    if expire:
+        data["expireDate"] = expire
+    s = c.ocs("POST", nc.SHARE_API, data=data)
+    return {"shareId": int(s["id"]), "token": s["token"], "rawUrl": f"{c.cfg.url}/raw/{s['token']}", "created": True}
+
+
+def inject_base(html: bytes, base_href: str) -> bytes:
+    text = html.decode("utf-8", "surrogateescape")
+    if re.search(r"<base\s", text, re.I):
+        return html
+    tag = f'<base href="{base_href}">'
+    m = re.search(r"<head[^>]*>", text, re.I)
+    if m:
+        text = text[: m.end()] + tag + text[m.end():]
+    else:
+        text = tag + text
+    return text.encode("utf-8", "surrogateescape")
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def public_probe(c, url: str, want_body=False):
+    headers = {"Cache-Control": "no-cache"}
+    st, h, body = c.request("GET" if want_body else "HEAD", url, headers=headers, auth=False)
+    return {"status": st, "content_type": h.get("content-type"), "csp": h.get("content-security-policy"),
+            "cache_control": h.get("cache-control"), "etag": h.get("etag")}, (body if want_body else None)
+
+
+def auto_preset(local: Path) -> str | None:
+    if local.is_dir():
+        return "site"
+    return "site" if local.suffix.lower() in HTML_EXT else None
+
+
+def local_files(local: Path, excludes=()) -> list[str]:
+    """Sorted relative paths of the files upload_dir would upload (same exclude rules)."""
+    return sorted(rel for p, rel in nc.walk_local(local, nc.DEFAULT_EXCLUDES + list(excludes)) if p.is_file())
+
+
+def site_url(raw_url: str, item_type: str, path: str | None = None) -> str:
+    """Public URL of a site (folder -> index.html) or of a file inside it; segments are percent-encoded,
+    a trailing slash is kept (sub-folder pages need it for their relative links)."""
+    sub = (path or "").strip("/")
+    if not sub:
+        return raw_url + ("/index.html" if item_type == "folder" else "")
+    return f"{raw_url}/{urllib.parse.quote(sub, safe='/')}" + ("/" if path.endswith("/") else "")
+
+
+def index_hashes(local_index: bytes, index_url: str) -> set[str]:
+    """Accepted sha256 of a served index.html: the plain local file or its --inject-base variant."""
+    return {sha256(local_index), sha256(inject_base(local_index, index_url))}
+
+
+def prune_gate(a):
+    if a.prune and not a.dry_run and not a.yes:
+        die("--prune deletes remote files that are missing locally; preview with --dry-run, then re-run with --yes")
+
+
+# ----------------------------------------------------------------------------- commands
+def cmd_publish(c, a):
+    prune_gate(a)
+    local = Path(a.local).expanduser()
+    if not local.exists():
+        die(f"no such file or directory: {local}")
+    default_name = local.stem if local.is_file() else local.name
+    name = sanitize_name(a.name or default_name)
+    root = nc.norm_path(a.root)
+    folder = site_path(root, name)
+    is_dir = local.is_dir()
+    share_node = folder if is_dir else f"{folder}/{local.name}"
+    preset = a.preset or auto_preset(local)
+    csp = a.csp if a.csp is not None else (nc.CSP_PRESETS[preset] if preset else None)
+    if preset and preset not in nc.CSP_PRESETS:
+        die(f"unknown preset {preset}; choose from {', '.join(nc.CSP_PRESETS)}")
+    has_index = is_dir and (local / "index.html").is_file()
+    first = None
+    if is_dir and not has_index:
+        files = local_files(local, a.exclude)
+        first = files[0] if files else None
+        log("note: no index.html in the local directory; /raw/<token> answers 200 'null' (application/json), "
+            "url points at the first file (/raw/<token>/<file>)")
+
+    log(f"site   {name}  ->  {share_node}")
+    if not a.dry_run:
+        c.mkcol(folder, parents=True)
+        if not is_dir:
+            c.put_file(local, share_node)
+            log(f"put    {share_node} ({nc.fmt_size(local.stat().st_size)})")
+    else:
+        log("dry-run: no changes will be made")
+
+    share = ensure_share(c, share_node, name, expire=a.expire, dry_run=a.dry_run)
+    log(f"share  id={share['shareId']} token={share['token']} ({'created' if share['created'] else 'reused'})")
+
+    raw_state = None
+    if not a.dry_run:
+        explicit_csp = a.csp is not None or a.preset is not None
+        if share["created"] or explicit_csp:
+            csp_to_apply = csp            # new share: auto preset; existing share: only when asked
+        else:
+            csp_to_apply = None           # keep whatever CSP the share already has
+        raw_state = nc.raw_set(c, share["shareId"], True, raw_only=True if a.raw_only else (False if a.show_share_page else None), csp=csp_to_apply)
+        csp_desc = ("preset:" + preset if preset and a.csp is None else "custom") if csp_to_apply else ("kept" if raw_state.get("csp") else "fallback")
+        log(f"raw    enabled={raw_state['enabled']} rawOnly={raw_state['rawOnly']} csp={csp_desc}")
+        if a.expire and not share["created"]:
+            c.ocs("PUT", f"{nc.SHARE_API}/{share['shareId']}", data={"expireDate": a.expire})
+
+    stats = {"dirs": 0, "files": 1 if not is_dir else 0, "bytes": 0 if is_dir else local.stat().st_size, "pruned": 0}
+    index_url = share["rawUrl"] + "/index.html"
+    # page_url is what gets printed and verified; check is the local file it must match (None = status only)
+    if not is_dir:
+        page_url, check = share["rawUrl"], local
+    elif has_index:
+        page_url, check = index_url, local / "index.html"
+    elif first:
+        page_url, check = site_url(share["rawUrl"], "folder", first), local / first
+    else:
+        page_url, check = share["rawUrl"], None   # empty folder: 200 application/json null
+    injected = None
+    if is_dir:
+        stats = nc.upload_dir(c, local, folder, excludes=a.exclude, prune=a.prune, dry_run=a.dry_run, log=log)
+        if a.inject_base and has_index and not a.dry_run:
+            injected = inject_base((local / "index.html").read_bytes(), index_url)
+            c.put(f"{folder}/index.html", injected, content_type="text/html")
+            log(f"base   injected <base href=\"{index_url}\"> into index.html")
+
+    result = {
+        "name": name, "path": share_node, "share_id": share["shareId"], "token": share["token"],
+        "url": page_url, "short_url": share["rawUrl"], "share_page": f"{c.cfg.url}/s/{share['token']}",
+        "raw_only": bool(raw_state and raw_state.get("rawOnly")),
+        "csp_preset": ("custom" if a.csp is not None else preset) if (share["created"] or a.csp is not None or a.preset is not None) else "kept",
+        "csp": (raw_state or {}).get("csp") if raw_state else csp, "expire": a.expire, "uploaded": stats, "dry_run": a.dry_run,
+    }
+    if not a.dry_run and not a.no_verify:
+        meta, body = public_probe(c, page_url, want_body=True)
+        ok = meta["status"] == 200
+        if ok and check:
+            ok = sha256(body) == sha256(injected if injected is not None else check.read_bytes())
+            meta["content_matches_local"] = ok
+        result["verify"] = meta
+        result["ok"] = ok
+        if not ok:
+            log(f"VERIFY FAILED: {meta}")
+    if a.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"published {name}")
+        print(f"  url        {result['url']}")
+        if has_index:
+            print(f"  short url  {result['short_url']}   (only if the page uses absolute asset paths or --inject-base)")
+        elif is_dir:
+            print(f"  short url  {result['short_url']}   (no index.html: answers 200 application/json null)")
+        print(f"  share      id={result['share_id']} token={result['token']} raw_only={result['raw_only']} csp={result['csp_preset']}")
+        if "verify" in result:
+            v = result["verify"]
+            print(f"  verify     HTTP {v['status']} {v['content_type']} match={v.get('content_matches_local', '-')}")
+    if not a.dry_run and not a.no_verify and not result.get("ok"):
+        sys.exit(2)
+
+
+def site_records(c, root: str):
+    root = nc.norm_path(root)
+    shares = c.ocs("GET", nc.SHARE_API)
+    out = []
+    for s in shares:
+        if int(s.get("share_type", -1)) != 3:
+            continue
+        p = str(s.get("path", ""))
+        if not p.startswith(root + "/"):
+            continue
+        rel = p[len(root) + 1:]
+        try:
+            raw = nc.raw_get(c, s["id"])
+        except nc.NcError:
+            raw = {}
+        base = raw.get("rawUrl") or f"{c.cfg.url}/raw/{s.get('token')}"
+        url, has_index = base, None
+        if s.get("item_type") == "folder":
+            has_index = c.exists(f"{p}/index.html")
+            if has_index:
+                url = base + "/index.html"
+            else:  # asset folder: /raw/<token> is 200 `null`, point at the first file like publish does
+                files = sorted(e["path"][len(p) + 1:] for e in nc.list_tree(c, p) if not e["is_dir"])
+                url = site_url(base, "folder", files[0]) if files else base
+        out.append({"name": rel if s.get("item_type") == "folder" else rel.rsplit("/", 1)[0],
+                    "path": p, "share_id": int(s["id"]), "token": s.get("token"), "item_type": s.get("item_type"),
+                    "raw_enabled": bool(raw.get("enabled")), "raw_only": bool(raw.get("rawOnly")), "csp": raw.get("csp"),
+                    "url": url, "base": base, "has_index": has_index,
+                    "label": s.get("label"), "expiration": s.get("expiration")})
+    return out
+
+
+def site_base(r) -> str:
+    """https://<host>/raw/<token> of a site record."""
+    return r.get("base") or (r["url"].rsplit("/index.html", 1)[0] if r["item_type"] == "folder" else r["url"])
+
+
+def cmd_list(c, a):
+    recs = site_records(c, a.root)
+    if a.json:
+        print(json.dumps(recs, ensure_ascii=False, indent=2))
+        return
+    if not recs:
+        print(f"no published sites under {a.root}")
+    for r in recs:
+        flag = "LIVE" if r["raw_enabled"] else "off "
+        print(f"{flag} {r['name']:24} share={r['share_id']:<4} {r['url']}  {('expires ' + r['expiration']) if r['expiration'] else ''}")
+
+
+def _find_site(c, root: str, name: str):
+    name = sanitize_name(name)
+    recs = [r for r in site_records(c, root) if r["name"] == name]
+    if not recs:
+        die(f"no published site named '{name}' under {root} (see `filehost list`)", 4)
+    return recs
+
+
+def cmd_info(c, a):
+    recs = _find_site(c, a.root, a.name)
+    r = recs[0]
+    try:
+        if r["item_type"] == "folder":
+            files = [e for e in nc.list_tree(c, r["path"]) if not e["is_dir"]]
+        else:
+            files = c.propfind(r["path"], depth="0")[:1]
+        r["files"] = len(files)
+        r["bytes"] = sum(int(e.get("size") or 0) for e in files)
+    except nc.NcError:
+        pass
+    if len(recs) > 1:
+        r["other_shares"] = [x["share_id"] for x in recs[1:]]
+    print(json.dumps(r, ensure_ascii=False, indent=2))
+
+
+def cmd_url(c, a):
+    r = _find_site(c, a.root, a.name)[0]
+    print(site_url(site_base(r), r["item_type"], a.path))
+
+
+def cmd_csp(c, a):
+    r = _find_site(c, a.root, a.name)[0]
+    if a.csp is None and not a.preset:
+        die("give --preset or --csp")
+    csp = a.csp if a.csp is not None else nc.CSP_PRESETS[a.preset]
+    doc = nc.raw_set(c, r["share_id"], True, csp=csp)
+    print(json.dumps({"share_id": r["share_id"], "csp": doc.get("csp")}, ensure_ascii=False, indent=2))
+
+
+def cmd_unpublish(c, a):
+    recs = _find_site(c, a.root, a.name)
+    if not a.yes:
+        die(f"this deletes {len(recs)} link share(s) for '{a.name}'" + (" AND the files" if a.delete_files else "") + "; re-run with --yes")
+    for r in recs:
+        c.ocs("DELETE", f"{nc.SHARE_API}/{r['share_id']}")
+        print(f"deleted share {r['share_id']} (raw link {r['token']} is now 404)")
+    if a.delete_files:
+        folder = site_path(a.root, a.name)
+        c.delete(folder)
+        print(f"deleted {folder} (recoverable from trash)")
+
+
+def cmd_verify(c, a):
+    r = _find_site(c, a.root, a.name)[0]
+    folder, base = r["item_type"] == "folder", site_base(r)
+    url, check, is_index = r["url"], None, folder      # check: local file the served bytes must match
+    local = Path(a.local).expanduser() if a.local else None
+    if local and local.is_dir():
+        if not folder or (local / "index.html").is_file():
+            check = local / "index.html"
+        else:                                           # asset folder: probe the same first file as publish
+            files, is_index = local_files(local), False
+            url = site_url(base, "folder", files[0]) if files else base
+            check = local / files[0] if files else None
+    elif local:
+        check = local
+    meta, body = public_probe(c, url, want_body=True)
+    if folder and meta["status"] == 404 and not local:  # no index.html remotely -> probe the first remote file
+        rels = sorted(e["path"][len(r["path"]) + 1:] for e in nc.list_tree(c, r["path"]) if not e["is_dir"])
+        if "index.html" not in rels:
+            url, is_index = (site_url(base, "folder", rels[0]) if rels else base), False
+            meta, body = public_probe(c, url, want_body=True)
+    result = {"name": r["name"], "url": url, **meta, "raw_enabled": r["raw_enabled"]}
+    if check and check.is_file():
+        data = check.read_bytes()
+        accepted = index_hashes(data, r["url"]) if is_index else {sha256(data)}  # plain or --inject-base variant
+        result["content_matches_local"] = sha256(body or b"") in accepted
+    ok = meta["status"] == 200 and result.get("content_matches_local", True)
+    result["ok"] = ok
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    sys.exit(0 if ok else 2)
+
+
+def cmd_presets(c, a):
+    print(json.dumps(nc.CSP_PRESETS, ensure_ascii=False, indent=2))
+
+
+# ----------------------------------------------------------------------------- argparse
+def build_parser():
+    root_help = f"Nextcloud folder holding all sites (default {DEFAULT_ROOT}, env FILEHOST_ROOT)"
+    p = argparse.ArgumentParser(prog="filehost", description="Publish public pages/sites/assets via Nextcloud link shares + Raw Fileserver")
+    p.add_argument("--root", default=os.environ.get("FILEHOST_ROOT", DEFAULT_ROOT), help=root_help)
+    p.add_argument("--version", action="version", version=VERSION)
+    sp = p.add_subparsers(dest="cmd", metavar="<command>")
+
+    def add(name, fn, help_):
+        s = sp.add_parser(name, help=help_)
+        s.set_defaults(fn=fn)
+        s.add_argument("--root", default=argparse.SUPPRESS, help=root_help)  # also after the subcommand; SUPPRESS keeps the global value
+        return s
+
+    s = add("publish", cmd_publish, "publish (or update) a directory or a single file")
+    s.add_argument("local", help="local directory (site) or single file (asset)")
+    s.add_argument("--name", help="site name (default: directory name / file stem); may contain / for nesting")
+    s.add_argument("--preset", choices=list(nc.CSP_PRESETS), help="CSP preset: site (default for html) | cdn | embed | asset | locked")
+    s.add_argument("--csp", help="explicit CSP header value ('' = app fallback: no JS, no linked assets)")
+    s.add_argument("--raw-only", action="store_true", help="hide the normal /s/<token> share page (404)")
+    s.add_argument("--show-share-page", action="store_true", help="explicitly keep the /s/<token> page (undo --raw-only)")
+    s.add_argument("--expire", help="share expiry YYYY-MM-DD (temporary page)")
+    s.add_argument("--prune", action="store_true", help="delete remote files that no longer exist locally (needs --yes unless --dry-run)")
+    s.add_argument("--yes", action="store_true", help="confirm --prune")
+    s.add_argument("--inject-base", action="store_true", help="insert <base href=.../index.html> so the short /raw/<token> URL also resolves relative links")
+    s.add_argument("--exclude", action="append", default=[], help="glob to skip (repeatable); .git, node_modules, .DS_Store are always skipped")
+    s.add_argument("--no-verify", action="store_true")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--json", action="store_true")
+
+    s = add("list", cmd_list, "list published sites under --root"); s.add_argument("--json", action="store_true")
+    s = add("info", cmd_info, "details of one site"); s.add_argument("name")
+    s = add("url", cmd_url, "print the public URL (optionally of a file inside the site; keep a trailing / for sub-folders)"); s.add_argument("name"); s.add_argument("path", nargs="?")
+    s = add("csp", cmd_csp, "change the CSP of a published site"); s.add_argument("name"); s.add_argument("--preset", choices=list(nc.CSP_PRESETS)); s.add_argument("--csp")
+    s = add("verify", cmd_verify, "probe the public URL (status, content-type, CSP, optional local hash compare)"); s.add_argument("name"); s.add_argument("--local")
+    s = add("unpublish", cmd_unpublish, "delete the link share(s) (raw link dies immediately); --delete-files also removes the folder"); s.add_argument("name"); s.add_argument("--delete-files", action="store_true"); s.add_argument("--yes", action="store_true")
+    add("presets", cmd_presets, "show CSP presets")
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    a = parser.parse_args(argv)
+    if not getattr(a, "fn", None):
+        parser.print_help()
+        return 0
+    try:
+        cfg = nc.Config(a)
+        if getattr(cfg, "env_error", None):  # e.g. NEXTCLOUD_USE_ENV set to a missing file: never fall back
+            die(cfg.env_error)
+        if hasattr(cfg, "missing") and cfg.missing():
+            die(f"{', '.join(cfg.missing())} not set: configure nextcloud-use first (`ncloud config init --url ... --user ...`)")
+        c = nc.Client(cfg)
+        a.fn(c, a)
+    except nc.NcError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 3
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

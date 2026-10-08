@@ -1,0 +1,1832 @@
+#!/usr/bin/env python3
+"""ncloud — Nextcloud CLI for AI agents (python3 stdlib only).
+
+Three access layers, one tool:
+  * HTTP APIs with an app password (WebDAV for files, OCS for shares/users/search,
+    files_sharing_raw API for raw links)                         -> most subcommands
+  * occ on the server (docker exec, a custom command, or either over ssh) -> `ncloud occ ...`
+  * MCP (an on-demand sidecar container, loaded by the agent runtime) -> `ncloud mcp ...`
+
+Everything instance-specific comes from the environment (precedence: flags > process env > env file):
+  NEXTCLOUD_URL            base URL, e.g. https://cloud.example.com        (required)
+  NEXTCLOUD_USER           login name                                      (required)
+  NEXTCLOUD_APP_PASSWORD   app password (Settings > Security)              (required for the HTTP layer)
+  NEXTCLOUD_OCC_MODE       auto | local | ssh | off                        (default auto)
+  NEXTCLOUD_OCC_CONTAINER  docker container running Nextcloud              (default nextcloud-aio-nextcloud)
+  NEXTCLOUD_OCC_COMMAND    occ command prefix replacing `docker exec ... php occ`,
+                           e.g. "sudo -u www-data php /var/www/nextcloud/occ"
+  NEXTCLOUD_OCC_SSH_HOST   ssh host (alias) of the Nextcloud server, for ssh mode
+  NEXTCLOUD_MCP_URL        MCP endpoint override (default: derived from the sidecar settings below)
+  NEXTCLOUD_MCP_CONTAINER  sidecar container name                          (default nextcloud-mcp)
+  NEXTCLOUD_MCP_PORT       host port bound on 127.0.0.1                    (default 18000)
+  NEXTCLOUD_MCP_NETWORK    docker network the sidecar joins (so other containers reach it by name)
+  NEXTCLOUD_MCP_APPS       comma list of MCP server apps                   (default webdav,sharing,calendar,contacts)
+  NEXTCLOUD_MCP_IMAGE      sidecar image                                   (default pinned below)
+  NEXTCLOUD_USE_NOTES      private site notes file                         (default NOTES.md next to the env file)
+  NEXTCLOUD_INSECURE       1 disables TLS verification (warns on stderr; avoid)
+  NEXTCLOUD_USE_ENV        explicit path to an env file (must exist when set)
+  Env files searched:  $NEXTCLOUD_USE_ENV, $XDG_CONFIG_HOME/nextcloud-use/env,
+                       ~/.config/nextcloud-use/env   (KEY=VALUE lines, # comments)
+
+This file is also importable (used by the `filehost` skill):
+  spec = importlib.util.spec_from_loader("ncloud", importlib.machinery.SourceFileLoader("ncloud", path))
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import fnmatch
+import json
+import mimetypes
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+VERSION = "0.2.0"
+NS = {"d": "DAV:", "oc": "http://owncloud.org/ns", "nc": "http://nextcloud.org/ns"}
+DEFAULT_OCC_CONTAINER = "nextcloud-aio-nextcloud"    # Nextcloud AIO's container name
+DEFAULT_MCP_CONTAINER = "nextcloud-mcp"
+DEFAULT_MCP_PORT = 18000
+DEFAULT_MCP_APPS = "webdav,sharing,calendar,contacts"
+DEFAULT_MCP_IMAGE = "ghcr.io/cbcoutinho/nextcloud-mcp-server:0.198.3"
+UA = f"nextcloud-use/{VERSION}"
+
+# Share permission bits (OCS): READ=1 UPDATE=2 CREATE=4 DELETE=8 SHARE=16
+PERM_ALIASES = {
+    "ro": 1, "read": 1,
+    "rw": 15, "edit": 15,
+    "upload": 4, "drop": 4, "filedrop": 4,
+    "full": 31, "all": 31,
+}
+SHARE_TYPES = {"user": 0, "group": 1, "link": 3, "email": 4, "remote": 6, "circle": 7, "team": 7, "room": 10, "talk": 10, "deck": 12}
+SHARE_TYPE_NAMES = {v: k for k, v in SHARE_TYPES.items() if k not in ("team", "talk", "drop")}
+
+# Content-Security-Policy presets for raw links (files_sharing_raw per-share CSP).
+CSP_PRESETS = {
+    # empty string clears the per-share CSP -> app falls back to its hard default:
+    # "sandbox; default-src 'none'; style-src data: 'unsafe-inline'; img-src data:; ..." (no JS, no linked assets)
+    "locked": "",
+    "site": ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+             "img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'; "
+             "frame-ancestors 'none'; base-uri 'self'; form-action 'none'; object-src 'none'"),
+    "cdn": ("default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; "
+            "img-src 'self' data: blob: https:; font-src 'self' data: https:; media-src 'self' data: blob: https:; "
+            "connect-src 'self' https:; frame-src https:; frame-ancestors 'none'; base-uri 'self'; form-action 'none'; object-src 'none'"),
+    "embed": ("default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; "
+              "img-src 'self' data: blob: https:; font-src 'self' data: https:; media-src 'self' data: blob: https:; "
+              "connect-src 'self' https:; frame-src https:; frame-ancestors *; base-uri 'self'; form-action 'none'; object-src 'none'"),
+    "asset": "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox",
+}
+
+
+# ----------------------------------------------------------------------------- config
+class NcError(Exception):
+    def __init__(self, message, status=None, body=None):
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+
+def _read_env_file(path: Path) -> dict:
+    out = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[7:]
+            k, v = line.split("=", 1)
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            out[k.strip()] = v
+    except OSError:
+        pass
+    return out
+
+
+def env_file_candidates() -> list[Path]:
+    cands = []
+    if os.environ.get("NEXTCLOUD_USE_ENV"):
+        cands.append(Path(os.environ["NEXTCLOUD_USE_ENV"]).expanduser())
+    xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    cands.append(Path(xdg) / "nextcloud-use" / "env")
+    cands.append(Path.home() / ".config" / "nextcloud-use" / "env")
+    seen, out = set(), []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+class Config:
+    def __init__(self, args=None):
+        merged = {}
+        self.env_file_used = None
+        self.env_error = None
+        explicit = os.environ.get("NEXTCLOUD_USE_ENV")
+        if explicit and not Path(explicit).expanduser().is_file():
+            # an explicit pin that does not exist must not silently fall back to another account's file
+            self.env_error = f"NEXTCLOUD_USE_ENV={explicit} does not exist (unset it or run `ncloud config init`)"
+        else:
+            for p in env_file_candidates():
+                if p.is_file():
+                    merged.update(_read_env_file(p))
+                    self.env_file_used = str(p)
+                    break
+        merged.update({k: v for k, v in os.environ.items() if k.startswith("NEXTCLOUD_")})
+        g = lambda k, d=None: merged.get(k, d)  # noqa: E731
+        # global flags use their own dests: subcommands have --password/--url/--user options of their own
+        # (share create --password is the SHARE password, mcp --url the MCP endpoint) that must never become credentials
+        self.url = (getattr(args, "nc_url", None) or g("NEXTCLOUD_URL") or "").rstrip("/")
+        self.user = getattr(args, "nc_user", None) or g("NEXTCLOUD_USER") or ""
+        self.password = getattr(args, "nc_password", None) or g("NEXTCLOUD_APP_PASSWORD")
+        self.occ_mode = g("NEXTCLOUD_OCC_MODE") or "auto"
+        self.occ_host = g("NEXTCLOUD_OCC_SSH_HOST") or None
+        self.occ_container = g("NEXTCLOUD_OCC_CONTAINER") or DEFAULT_OCC_CONTAINER
+        self.occ_command = g("NEXTCLOUD_OCC_COMMAND") or None
+        self.mcp_url = g("NEXTCLOUD_MCP_URL") or None  # None -> Client.mcp_url() derives it
+        self.mcp_container = g("NEXTCLOUD_MCP_CONTAINER") or DEFAULT_MCP_CONTAINER
+        self.mcp_port = int(g("NEXTCLOUD_MCP_PORT") or DEFAULT_MCP_PORT)
+        self.mcp_network = g("NEXTCLOUD_MCP_NETWORK") or None
+        self.mcp_apps = [x.strip() for x in (g("NEXTCLOUD_MCP_APPS") or DEFAULT_MCP_APPS).split(",") if x.strip()]
+        self.mcp_image = g("NEXTCLOUD_MCP_IMAGE") or DEFAULT_MCP_IMAGE
+        base = Path(self.env_file_used).parent if self.env_file_used else env_file_candidates()[0].parent
+        self.notes_file = Path(g("NEXTCLOUD_USE_NOTES") or base / "NOTES.md").expanduser()
+        self.timeout = float(g("NEXTCLOUD_TIMEOUT", "120"))
+        self.insecure = str(g("NEXTCLOUD_INSECURE", "")).lower() in ("1", "true", "yes")
+
+    def missing(self) -> list[str]:
+        """Required settings that are not configured (the skill ships no instance defaults)."""
+        return [k for k, v in (("NEXTCLOUD_URL", self.url), ("NEXTCLOUD_USER", self.user)) if not v]
+
+    def require_password(self):
+        if self.env_error:
+            raise NcError(self.env_error)
+        if self.missing():
+            raise NcError(f"{', '.join(self.missing())} not set: export it or run `ncloud config init` ({env_file_candidates()[0]})")
+        if not self.password:
+            cands = env_file_candidates()
+            raise NcError(
+                "NEXTCLOUD_APP_PASSWORD is not set. Export it, or run `ncloud config init --app-password ...` "
+                f"(writes {cands[0]}). Env files searched: {', '.join(map(str, cands))}"
+            )
+
+
+# ----------------------------------------------------------------------------- http client
+def quote_path(path: str) -> str:
+    """Percent-encode a Nextcloud path segment-wise (keeps '/'); handles Chinese names."""
+    return "/".join(urllib.parse.quote(seg, safe="") for seg in path.split("/"))
+
+
+def norm_path(path: str) -> str:
+    p = "/" + path.strip().strip("/")
+    return "" if p == "/" else p
+
+
+class _SameOriginAuthRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib copies every header (Authorization too) to redirect targets; drop it when the origin changes."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and origin_of(newurl) != origin_of(req.full_url):
+            new.remove_header("Authorization")
+        return new
+
+
+def origin_of(url: str):
+    u = urllib.parse.urlsplit(url)
+    port = u.port or {"http": 80, "https": 443}.get(u.scheme)
+    return (u.scheme.lower(), (u.hostname or "").lower(), port)
+
+
+class Client:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        handlers = [_SameOriginAuthRedirect()]
+        if cfg.insecure:
+            import ssl
+            print("warning: NEXTCLOUD_INSECURE=1 -> TLS certificates are NOT verified", file=sys.stderr)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
+        self._opener = urllib.request.build_opener(*handlers)
+        self._auth = None
+        if cfg.password:
+            self._auth = "Basic " + base64.b64encode(f"{cfg.user}:{cfg.password}".encode()).decode()
+
+    # low level ---------------------------------------------------------------
+    def request(self, method: str, url: str, data=None, headers=None, auth=True, stream=False):
+        """Returns (status, headers_dict_lower, body_bytes_or_response)."""
+        h = {"User-Agent": UA}
+        if auth:
+            if not self._auth:
+                self.cfg.require_password()
+            h["Authorization"] = self._auth
+        if headers:
+            h.update(headers)
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        req = urllib.request.Request(url, data=data, method=method, headers=h)
+        try:
+            resp = self._opener.open(req, timeout=self.cfg.timeout)
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            return e.code, {k.lower(): v for k, v in e.headers.items()}, body
+        except urllib.error.URLError as e:
+            raise NcError(f"connection failed: {e.reason} ({url})")
+        except OSError as e:  # connection reset / timeout while a service is still booting
+            raise NcError(f"connection failed: {e} ({url})")
+        hdrs = {k.lower(): v for k, v in resp.headers.items()}
+        if stream:
+            return resp.status, hdrs, resp
+        return resp.status, hdrs, resp.read()
+
+    # OCS ---------------------------------------------------------------------
+    def ocs(self, method: str, path: str, params: dict | None = None, data: dict | None = None, json_body=None, ok=(200, 100)):
+        url = self.cfg.url + path
+        q = dict(params or {})
+        q["format"] = "json"
+        url += ("&" if "?" in url else "?") + urllib.parse.urlencode(q, doseq=True)
+        headers = {"OCS-APIRequest": "true", "Accept": "application/json"}
+        body = None
+        if json_body is not None:
+            body = json.dumps(json_body)
+            headers["Content-Type"] = "application/json"
+        elif data is not None:
+            body = urllib.parse.urlencode({k: v for k, v in data.items() if v is not None}, doseq=True)
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        status, hdrs, raw = self.request(method, url, data=body, headers=headers)
+        try:
+            doc = json.loads(raw.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            raise NcError(f"OCS {method} {path}: HTTP {status}, non-JSON body: {raw[:300]!r}", status, raw)
+        meta = doc.get("ocs", {}).get("meta", {})
+        code = meta.get("statuscode")
+        if status >= 400 or code not in ok:
+            raise NcError(f"OCS {method} {path}: HTTP {status} statuscode={code} {meta.get('message')}", status, doc)
+        return doc["ocs"].get("data")
+
+    # App routes (non-OCS) still work with Basic auth when OCS-APIRequest is sent (CSRF bypass).
+    def app_json(self, method: str, path: str, data: dict | None = None, ok=(200,)):
+        headers = {"OCS-APIRequest": "true", "Accept": "application/json"}
+        body = None
+        if data is not None:
+            body = urllib.parse.urlencode({k: v for k, v in data.items() if v is not None})
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        status, hdrs, raw = self.request(method, self.cfg.url + path, data=body, headers=headers)
+        text = raw.decode("utf-8", "replace")
+        try:
+            doc = json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            raise NcError(f"{method} {path}: HTTP {status}, non-JSON body (app missing? auth?): {text[:200]!r}", status, text)
+        if status not in ok:
+            raise NcError(f"{method} {path}: HTTP {status} {doc}", status, doc)
+        return doc
+
+    # WebDAV ------------------------------------------------------------------
+    def dav_files_url(self, path: str) -> str:
+        return f"{self.cfg.url}/remote.php/dav/files/{urllib.parse.quote(self.cfg.user)}{quote_path(norm_path(path))}"
+
+    def dav(self, method: str, url: str, body=None, headers=None, ok=None, stream=False):
+        h = {"OCS-APIRequest": "true"}
+        if headers:
+            h.update(headers)
+        status, hdrs, data = self.request(method, url, data=body, headers=h, stream=stream)
+        if ok is not None and status not in ok:
+            snippet = data[:400].decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else ""
+            msg = _dav_error_message(snippet) or snippet
+            raise NcError(f"{method} {url}: HTTP {status} {msg}", status, data)
+        return status, hdrs, data
+
+    PROPS = ("d:resourcetype d:getcontentlength d:getcontenttype d:getetag d:getlastmodified "
+             "oc:fileid oc:id oc:size oc:permissions oc:share-types oc:favorite oc:owner-id oc:checksums "
+             "nc:has-preview nc:is-mount-root oc:comments-unread")
+
+    def propfind(self, path: str, depth="1", props: str | None = None, url: str | None = None) -> list[dict]:
+        props = props or self.PROPS
+        body = ('<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" '
+                'xmlns:nc="http://nextcloud.org/ns"><d:prop>' +
+                "".join(f"<{p}/>" for p in props.split()) + "</d:prop></d:propfind>")
+        url = url or self.dav_files_url(path)
+        status, hdrs, data = self.dav("PROPFIND", url, body=body, headers={"Depth": str(depth), "Content-Type": "application/xml"}, ok=(207,))
+        return parse_multistatus(data, self.cfg.user)
+
+    def mkcol(self, path: str, parents=False):
+        if parents:
+            parts = norm_path(path).strip("/").split("/")
+            for i in range(1, len(parts) + 1):
+                sub = "/".join(parts[:i])
+                st, _, _ = self.dav("MKCOL", self.dav_files_url(sub))
+                if st not in (201, 405):
+                    raise NcError(f"MKCOL {sub}: HTTP {st}", st)
+            return
+        self.dav("MKCOL", self.dav_files_url(path), ok=(201,))
+
+    def put(self, path: str, data: bytes, mtime: float | None = None, content_type: str | None = None):
+        headers = {"X-NC-WebDAV-Auto-Mkcol": "1"}  # server creates missing parent folders (dav UploadAutoMkcolPlugin)
+        if mtime:
+            headers["X-OC-Mtime"] = str(int(mtime))
+        if content_type:
+            headers["Content-Type"] = content_type
+        st, hdrs, _ = self.dav("PUT", self.dav_files_url(path), body=data, headers=headers, ok=(200, 201, 204))
+        return st, hdrs
+
+    CHUNK_THRESHOLD = int(os.environ.get("NEXTCLOUD_CHUNK_THRESHOLD_MB", "64")) * 1024 * 1024
+    CHUNK_SIZE = int(os.environ.get("NEXTCLOUD_CHUNK_SIZE_MB", "20")) * 1024 * 1024
+
+    def put_file(self, local: Path, path: str, keep_mtime=True):
+        size = local.stat().st_size
+        mtime = local.stat().st_mtime if keep_mtime else None
+        if size >= self.CHUNK_THRESHOLD:
+            return self.put_file_chunked(local, path, mtime=mtime)
+        data = local.read_bytes()
+        ct = mimetypes.guess_type(local.name)[0]
+        return self.put(path, data, mtime=mtime, content_type=ct)
+
+    def put_file_chunked(self, local: Path, path: str, mtime: float | None = None):
+        """Chunked upload v2 (docs: developer_manual/client_apis/WebDAV/chunking.html).
+
+        MKCOL /remote.php/dav/uploads/<user>/<id>  (Destination header) -> PUT numbered chunks -> MOVE .file -> destination.
+        Avoids proxy body-size limits and lets Nextcloud assemble the file server-side.
+        """
+        size = local.stat().st_size
+        upload_id = f"ncloud-{int(time.time())}-{os.getpid()}"
+        base = f"{self.cfg.url}/remote.php/dav/uploads/{urllib.parse.quote(self.cfg.user)}/{upload_id}"
+        dest = self.dav_files_url(path)
+        common = {"Destination": dest, "OC-Total-Length": str(size)}
+        self.dav("MKCOL", base, headers=common, ok=(201,))
+        try:
+            with open(local, "rb") as f:
+                i = 0
+                while True:
+                    chunk = f.read(self.CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    i += 1
+                    self.dav("PUT", f"{base}/{i:05d}", body=chunk, headers=common, ok=(201, 204))
+            move_headers = {"Destination": dest, "Overwrite": "T", "OC-Total-Length": str(size)}
+            if mtime:
+                move_headers["X-OC-Mtime"] = str(int(mtime))
+            st, hdrs, _ = self.dav("MOVE", f"{base}/.file", headers=move_headers, ok=(201, 204))
+            return st, hdrs
+        except Exception:
+            try:
+                self.dav("DELETE", base)
+            finally:
+                raise
+
+    def get(self, path: str) -> bytes:
+        st, hdrs, data = self.dav("GET", self.dav_files_url(path), ok=(200,))
+        return data
+
+    def get_to_file(self, path: str, out: Path):
+        st, hdrs, resp = self.dav("GET", self.dav_files_url(path), ok=(200,), stream=True)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "wb") as f:
+            shutil.copyfileobj(resp, f)
+
+    def delete(self, path: str):
+        self.dav("DELETE", self.dav_files_url(path), ok=(204,))
+
+    def move(self, src: str, dst: str, overwrite=False):
+        self.dav("MOVE", self.dav_files_url(src), headers={"Destination": self.dav_files_url(dst), "Overwrite": "T" if overwrite else "F"}, ok=(201, 204))
+
+    def copy(self, src: str, dst: str, overwrite=False):
+        self.dav("COPY", self.dav_files_url(src), headers={"Destination": self.dav_files_url(dst), "Overwrite": "T" if overwrite else "F"}, ok=(201, 204))
+
+    def exists(self, path: str):
+        st, _, _ = self.dav("PROPFIND", self.dav_files_url(path), headers={"Depth": "0"},
+                            body='<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>')
+        return st == 207
+
+    def search(self, where_xml: str, scope: str = "/", limit: int = 100, order_prop="d:getlastmodified", descending=True) -> list[dict]:
+        scope_href = f"/files/{self.cfg.user}{norm_path(scope)}"
+        body = f'''<?xml version="1.0" encoding="UTF-8"?>
+<d:searchrequest xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
+ <d:basicsearch>
+  <d:select><d:prop><d:displayname/><d:resourcetype/><d:getcontenttype/><d:getcontentlength/><d:getlastmodified/><d:getetag/><oc:fileid/><oc:size/><oc:permissions/></d:prop></d:select>
+  <d:from><d:scope><d:href>{scope_href}</d:href><d:depth>infinity</d:depth></d:scope></d:from>
+  <d:where>{where_xml}</d:where>
+  <d:orderby><d:order><d:prop><{order_prop}/></d:prop><{'d:descending' if descending else 'd:ascending'}/></d:order></d:orderby>
+  <d:limit><d:nresults>{int(limit)}</d:nresults></d:limit>
+ </d:basicsearch>
+</d:searchrequest>'''
+        st, hdrs, data = self.dav("SEARCH", f"{self.cfg.url}/remote.php/dav/", body=body, headers={"Content-Type": "text/xml"}, ok=(207,))
+        return parse_multistatus(data, self.cfg.user)
+
+    def fileid(self, path: str) -> int:
+        entries = self.propfind(path, depth="0", props="oc:fileid d:resourcetype")
+        if not entries:
+            raise NcError(f"not found: {path}", 404)
+        return int(entries[0]["fileid"])
+
+    # occ ---------------------------------------------------------------------
+    def occ_mode(self) -> str:
+        """local (this machine), ssh (NEXTCLOUD_OCC_SSH_HOST) or off (occ not reachable)."""
+        mode = self.cfg.occ_mode
+        if mode in ("local", "ssh", "off"):
+            return mode
+        if self.cfg.occ_command:
+            return "ssh" if self.cfg.occ_host else "local"
+        if shutil.which("docker"):
+            r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", self.cfg.occ_container], capture_output=True, text=True)
+            if r.returncode == 0 and r.stdout.strip() == "true":
+                return "local"
+        return "ssh" if self.cfg.occ_host else "off"
+
+    OCC_FORWARD_ENV = ("NC_PASS", "OC_PASS")  # consumed by --password-from-env style flags
+
+    def occ_argv(self, args: list[str]) -> list[str]:
+        mode = self.occ_mode()
+        if mode == "off":
+            raise NcError("occ is not configured: run on the Nextcloud host (docker container "
+                          f"{self.cfg.occ_container!r}), or set NEXTCLOUD_OCC_SSH_HOST / NEXTCLOUD_OCC_COMMAND / NEXTCLOUD_OCC_MODE")
+        if self.cfg.occ_command:
+            base = shlex.split(self.cfg.occ_command) + list(args)
+            return base if mode == "local" else self.ssh_argv(base)
+        env_flags = []
+        for v in self.OCC_FORWARD_ENV:
+            if v in os.environ:
+                env_flags += ["-e", v]  # docker exec copies the value from the client's environment (local mode only)
+        base = ["docker", "exec", "-i"] + env_flags + ["-u", "www-data", "--", self.cfg.occ_container, "php", "occ"] + list(args)
+        if mode == "local":
+            return base
+        if env_flags:
+            print("warning: NC_PASS/OC_PASS are not forwarded over ssh; run the occ command on the host instead", file=sys.stderr)
+            base = [x for x in base if x not in self.OCC_FORWARD_ENV and x != "-e"]
+        return self.ssh_argv(base)
+
+    def ssh_argv(self, argv: list[str]) -> list[str]:
+        if not self.cfg.occ_host:
+            raise NcError("NEXTCLOUD_OCC_SSH_HOST is not set (needed to reach the Nextcloud host over ssh)")
+        remote = " ".join(shlex.quote(a) for a in argv)
+        return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", self.cfg.occ_host, remote]
+
+    def mcp_url(self) -> str:
+        """NEXTCLOUD_MCP_URL, else follow the occ transport: on the docker host use the loopback port,
+        elsewhere (e.g. another container on NEXTCLOUD_MCP_NETWORK) the container name."""
+        if self.cfg.mcp_url:
+            return self.cfg.mcp_url
+        if self.occ_mode() == "local":
+            return f"http://127.0.0.1:{self.cfg.mcp_port}/mcp"
+        return f"http://{self.cfg.mcp_container}:8000/mcp"
+
+    def docker_argv(self, argv: list[str]) -> list[str]:
+        """Run a docker command where the containers live: here, or on NEXTCLOUD_OCC_SSH_HOST."""
+        return argv if self.occ_mode() == "local" else self.ssh_argv(argv)
+
+    def occ(self, args: list[str], input_data: bytes | None = None, capture=True) -> subprocess.CompletedProcess:
+        argv = self.occ_argv(args)
+        return subprocess.run(argv, input=input_data, capture_output=capture, stdin=None if input_data is not None else (subprocess.DEVNULL if capture else None))
+
+    def occ_json(self, args: list[str]):
+        r = self.occ(list(args) + ["--output=json"])
+        if r.returncode != 0:
+            raise NcError(f"occ {' '.join(args)} failed ({r.returncode}): {r.stderr.decode('utf-8', 'replace').strip()[:500]}")
+        out = r.stdout.decode("utf-8", "replace").strip()
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
+            raise NcError(f"occ {' '.join(args)}: non-JSON output: {out[:300]}")
+
+
+def _dav_error_message(snippet: str) -> str | None:
+    if "<s:message>" in snippet:
+        try:
+            return snippet.split("<s:message>", 1)[1].split("</s:message>", 1)[0]
+        except Exception:
+            return None
+    return None
+
+
+def parse_multistatus(data: bytes, user: str) -> list[dict]:
+    root = ET.fromstring(data)
+    out = []
+    prefix = f"/remote.php/dav/files/{urllib.parse.quote(user)}"
+    for resp in root.findall("d:response", NS):
+        href = resp.findtext("d:href", default="", namespaces=NS)
+        entry = {"href": href}
+        dec = urllib.parse.unquote(href)
+        if dec.startswith(prefix):
+            rel = dec[len(prefix):]
+            entry["path"] = "/" if rel in ("", "/") else rel.rstrip("/")
+        else:
+            entry["path"] = dec
+        entry["name"] = os.path.basename(entry["path"].rstrip("/")) or "/"
+        for ps in resp.findall("d:propstat", NS):
+            status = ps.findtext("d:status", default="", namespaces=NS)
+            if "200" not in status:
+                continue
+            prop = ps.find("d:prop", NS)
+            if prop is None:
+                continue
+            for child in prop:
+                tag = child.tag.split("}", 1)[-1]
+                if tag == "resourcetype":
+                    entry["is_dir"] = child.find("d:collection", NS) is not None
+                elif tag == "share-types":
+                    entry["share_types"] = [int(x.text) for x in child.findall("oc:share-type", NS) if x.text]
+                elif tag == "checksums":
+                    entry["checksums"] = [x.text for x in child.findall("oc:checksum", NS)]
+                elif tag in ("getcontentlength", "size", "fileid", "favorite", "comments-unread"):
+                    try:
+                        entry[tag.replace("getcontentlength", "size")] = int(child.text or 0)
+                    except ValueError:
+                        entry[tag] = child.text
+                elif tag == "getetag":
+                    entry["etag"] = (child.text or "").strip('"')
+                elif tag == "getlastmodified":
+                    entry["mtime"] = child.text
+                elif tag == "getcontenttype":
+                    entry["mime"] = child.text
+                else:
+                    entry[tag.replace("-", "_")] = child.text
+        entry.setdefault("is_dir", entry.get("mime") is None and "size" not in entry)
+        out.append(entry)
+    return out
+
+
+# ----------------------------------------------------------------------------- output helpers
+def out_json(obj):
+    print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+def fmt_size(n):
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "-"
+    for unit in ("B", "K", "M", "G", "T"):
+        if n < 1024 or unit == "T":
+            return f"{n}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+    return str(n)
+
+
+def print_entries(entries, long=False):
+    for e in entries:
+        kind = "d" if e.get("is_dir") else "-"
+        size = "-" if e.get("is_dir") else fmt_size(e.get("size"))
+        line = f"{kind} {size:>8} {e.get('mtime', '')[:25]:25} {e['path']}"
+        if long:
+            line += f"  id={e.get('fileid')} perm={e.get('permissions')} mime={e.get('mime') or '-'}"
+            if e.get("share_types"):
+                line += f" shared={','.join(SHARE_TYPE_NAMES.get(t, str(t)) for t in e['share_types'])}"
+        print(line)
+
+
+def confirm_or_die(args, what):
+    if not getattr(args, "yes", False):
+        die(f"refusing destructive operation ({what}) without --yes")
+
+
+def die(msg, code=1):
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def write_secret(path: Path, text: str):
+    """Create/replace a credential file atomically with mode 0600 (no world-readable window); parent dir 0700."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+# ----------------------------------------------------------------------------- commands: core
+def cmd_doctor(c: Client, a):
+    cfg = c.cfg
+    rows = []
+
+    def row(name, ok, info=""):
+        rows.append((name, ok, info))
+
+    if cfg.env_error:
+        row("config", False, cfg.env_error)
+    elif cfg.missing():
+        row("config", False, f"{', '.join(cfg.missing())} not set -> `ncloud config init --url ... --user ... --app-password ...` "
+                             f"({env_file_candidates()[0]})")
+        a.deep = False
+    elif cfg.password:
+        row("config", True, f"url={cfg.url} user={cfg.user} env_file={cfg.env_file_used or '-'} password=set")
+    else:
+        row("config", False, f"url={cfg.url} user={cfg.user} password=MISSING -> run `ncloud config init --app-password ...` ({env_file_candidates()[0]})")
+    row("notes", True, f"{cfg.notes_file}: present, read it before acting" if cfg.notes_file.is_file()
+        else f"none ({cfg.notes_file})")
+    try:
+        if cfg.missing():
+            raise NcError("no NEXTCLOUD_URL")
+        st, h, body = c.request("GET", cfg.url + "/status.php", auth=False)
+        s = json.loads(body)
+        row("status.php", st == 200 and s.get("installed"), f"version={s.get('versionstring')} maintenance={s.get('maintenance')}")
+        maintenance = s.get("maintenance")
+    except Exception as e:  # noqa: BLE001
+        row("status.php", False, str(e))
+        maintenance = None
+    auth_ok = False
+    if cfg.password and not cfg.missing():
+        try:
+            u = c.ocs("GET", "/ocs/v2.php/cloud/user")
+            row("ocs auth", True, f"id={u.get('id')} groups={','.join(u.get('groups', []))}")
+            auth_ok = True
+        except Exception as e:  # noqa: BLE001
+            row("ocs auth", False, str(e)[:200] + "  (stopping authenticated checks: repeated 401s trigger bruteforce throttling)")
+    else:
+        row("authenticated", False, "skipped: no usable app password (ocs auth / sharing / webdav / files_sharing_raw not checked)")
+    if auth_ok:
+        try:
+            caps = c.ocs("GET", "/ocs/v2.php/cloud/capabilities")
+            pub = caps["capabilities"]["files_sharing"]["public"]
+            row("sharing", bool(pub.get("enabled")), f"public_links={pub.get('enabled')} password_enforced={pub.get('password', {}).get('enforced')} custom_tokens={pub.get('custom_tokens')}")
+        except Exception as e:  # noqa: BLE001
+            row("sharing", False, str(e)[:200])
+        try:
+            entries = c.propfind("/", depth="0", props="oc:fileid d:resourcetype")
+            row("webdav", bool(entries), f"root fileid={entries[0].get('fileid') if entries else '-'}")
+        except Exception as e:  # noqa: BLE001
+            row("webdav", False, str(e)[:200])
+        try:
+            doc = c.app_json("GET", "/apps/files_sharing_raw/api/v1/raw-share/0", ok=(200, 404))
+            row("files_sharing_raw", True, "api reachable (expected not_found for id 0)" if doc.get("error") == "not_found" else str(doc)[:80])
+        except NcError as e:
+            row("files_sharing_raw", False, f"{e} (app disabled or missing?)")
+    # occ (optional layer)
+    try:
+        mode = c.occ_mode()
+        if mode == "off":
+            raise NcError("not configured (no local container, NEXTCLOUD_OCC_SSH_HOST or NEXTCLOUD_OCC_COMMAND): "
+                          "admin features via occ are unavailable")
+        r = c.occ(["status", "--output=json"])
+        if r.returncode == 0:
+            s = json.loads(r.stdout.decode())
+            row("occ", True, f"mode={mode} version={s.get('versionstring')} maintenance={s.get('maintenance')}")
+        else:
+            row("occ", False, f"mode={mode} rc={r.returncode} {r.stderr.decode('utf-8', 'replace').strip()[:160]}")
+    except Exception as e:  # noqa: BLE001
+        row("occ", False, str(e)[:200])
+    if a.deep and auth_ok:
+        try:
+            shares = c.ocs("GET", "/ocs/v2.php/apps/files_sharing/api/v1/shares")
+            links = [s for s in shares if int(s.get("share_type", -1)) == 3]
+            row("shares", True, f"total={len(shares)} link_shares={len(links)}")
+        except Exception as e:  # noqa: BLE001
+            row("shares", False, str(e)[:200])
+        try:
+            provs = c.ocs("GET", "/ocs/v2.php/search/providers")
+            row("search providers", True, ",".join(p["id"] for p in provs)[:200])
+        except Exception as e:  # noqa: BLE001
+            row("search providers", False, str(e)[:200])
+        try:
+            res = c.search("<d:like><d:prop><d:displayname/></d:prop><d:literal>%.md</d:literal></d:like>", limit=3)
+            row("dav SEARCH", True, f"{len(res)} sample hits")
+        except Exception as e:  # noqa: BLE001
+            row("dav SEARCH", False, str(e)[:200])
+        try:
+            st, h, body = c.request("GET", cfg.url + "/raw/doctor-probe-nonexistent", auth=False)
+            row("/raw route", st == 404 and "text/plain" in h.get("content-type", ""), f"HTTP {st} {h.get('content-type')}")
+        except Exception as e:  # noqa: BLE001
+            row("/raw route", False, str(e)[:200])
+        if maintenance:
+            row("maintenance", False, "instance is in maintenance mode: WebDAV/OCS will fail until it is off")
+    if a.json:
+        out_json([{"check": n, "ok": bool(ok), "info": i} for n, ok, i in rows])
+    else:
+        for n, ok, i in rows:
+            print(f"{'OK ' if ok else 'ERR'} {n:18} {i}")
+    sys.exit(0 if all(ok for _, ok, _ in rows) else 2)
+
+
+def cmd_whoami(c, a):
+    out_json(c.ocs("GET", "/ocs/v2.php/cloud/user"))
+
+
+def cmd_status(c, a):
+    st, h, body = c.request("GET", c.cfg.url + "/status.php", auth=False)
+    print(body.decode())
+
+
+def cmd_caps(c, a):
+    caps = c.ocs("GET", "/ocs/v2.php/cloud/capabilities")
+    if a.section:
+        node = caps["capabilities"]
+        for part in a.section.split("."):
+            node = node.get(part, {}) if isinstance(node, dict) else {}
+        out_json(node)
+    else:
+        out_json(caps if a.full else {"version": caps["version"], "apps": sorted(caps["capabilities"].keys())})
+
+
+# ----------------------------------------------------------------------------- commands: files
+def cmd_ls(c, a):
+    entries = c.propfind(a.path, depth=str(a.depth))
+    if str(a.depth) != "0" and entries and entries[0].get("is_dir"):
+        entries = entries[1:]  # drop the folder itself (first response is the requested collection)
+    if a.json:
+        out_json(entries)
+    else:
+        print_entries(entries, long=a.long)
+
+
+def cmd_stat(c, a):
+    entries = c.propfind(a.path, depth="0")
+    if not entries:
+        die(f"not found: {a.path}", 4)
+    e = entries[0]
+    if a.json:
+        out_json(e)
+    else:
+        for k, v in e.items():
+            print(f"{k:14} {v}")
+
+
+def cmd_fileid(c, a):
+    print(c.fileid(a.path))
+
+
+def cmd_path(c, a):
+    # Nextcloud resolves /index.php/f/<fileid> (redirect to Files UI). Fallback: dav SEARCH by fileid.
+    res = c.search(f"<d:eq><d:prop><oc:fileid/></d:prop><d:literal>{int(a.fileid)}</d:literal></d:eq>", limit=1)
+    if not res:
+        die(f"fileid {a.fileid} not found in {c.cfg.user}'s files", 4)
+    print(res[0]["path"])
+
+
+def cmd_get(c, a):
+    if a.out and a.out != "-":
+        c.get_to_file(a.path, Path(a.out))
+        print(f"saved {a.out}", file=sys.stderr)
+    else:
+        sys.stdout.buffer.write(c.get(a.path))
+
+
+def cmd_put(c, a):
+    if a.local == "-":
+        data = sys.stdin.buffer.read()
+        st, h = c.put(a.path, data, content_type=mimetypes.guess_type(a.path)[0])
+    else:
+        p = Path(a.local)
+        if not p.is_file():
+            die(f"no such local file: {p}")
+        st, h = c.put_file(p, a.path, keep_mtime=not a.no_mtime)
+    print(f"{'created' if st == 201 else 'updated'} {a.path} fileid={h.get('oc-fileid')} etag={h.get('oc-etag') or h.get('etag')}")
+
+
+def cmd_mkdir(c, a):
+    c.mkcol(a.path, parents=a.parents)
+    print(f"created {a.path}")
+
+
+def cmd_rm(c, a):
+    confirm_or_die(a, f"DELETE {a.path}")
+    c.delete(a.path)
+    print(f"deleted {a.path} (recoverable from trash for a while)")
+
+
+def cmd_mv(c, a):
+    c.move(a.src, a.dst, overwrite=a.overwrite)
+    print(f"moved {a.src} -> {a.dst}")
+
+
+def cmd_cp(c, a):
+    c.copy(a.src, a.dst, overwrite=a.overwrite)
+    print(f"copied {a.src} -> {a.dst}")
+
+
+DEFAULT_EXCLUDES = [".git", ".git/*", "*/.git/*", ".DS_Store", "*/.DS_Store", "Thumbs.db", "*/Thumbs.db", "node_modules", "*/node_modules/*", "node_modules/*"]
+
+
+def walk_local(root: Path, excludes: list[str]):
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root).as_posix()
+        if any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(p.name, pat) for pat in excludes):
+            continue
+        yield p, rel
+
+
+def upload_dir(c: Client, local: Path, remote: str, excludes=None, prune=False, dry_run=False, log=print):
+    """Upload a directory tree. Returns dict with counts. Used by filehost."""
+    excludes = DEFAULT_EXCLUDES + list(excludes or [])
+    remote = norm_path(remote)
+    stats = {"dirs": 0, "files": 0, "bytes": 0, "pruned": 0}
+    if not dry_run:
+        c.mkcol(remote, parents=True)
+    local_set = set()
+    for p, rel in walk_local(local, excludes):
+        target = f"{remote}/{rel}"
+        if p.is_dir():
+            stats["dirs"] += 1
+            if not dry_run:
+                st, _, _ = c.dav("MKCOL", c.dav_files_url(target))
+                if st not in (201, 405):
+                    raise NcError(f"MKCOL {target}: HTTP {st}", st)
+            log(f"dir  {target}")
+        elif p.is_file():
+            local_set.add(rel)
+            stats["files"] += 1
+            stats["bytes"] += p.stat().st_size
+            if not dry_run:
+                c.put_file(p, target)
+            log(f"put  {target} ({fmt_size(p.stat().st_size)})")
+    if prune:
+        try:
+            remote_entries = list_tree(c, remote)
+        except NcError as e:
+            if not (dry_run and e.status == 404):
+                raise
+            remote_entries = []  # first publish: nothing to prune yet
+        for e in remote_entries:
+            if e["is_dir"]:
+                continue
+            rel = e["path"][len(remote) + 1:]
+            if rel not in local_set:
+                stats["pruned"] += 1
+                log(f"rm   {e['path']} (not in local)")
+                if not dry_run:
+                    c.delete(e["path"])
+    return stats
+
+
+def list_tree(c: Client, remote: str) -> list[dict]:
+    """Recursive listing using Depth: 1 per level (bounded responses; Depth: infinity also works on NC 33 but returns everything at once)."""
+    out = []
+    stack = [norm_path(remote)]
+    while stack:
+        cur = stack.pop()
+        entries = c.propfind(cur or "/", depth="1", props="d:resourcetype d:getcontentlength d:getcontenttype d:getetag oc:fileid oc:permissions oc:share-types d:getlastmodified")
+        for e in entries[1:]:
+            out.append(e)
+            if e.get("is_dir"):
+                stack.append(e["path"])
+    return out
+
+
+def cmd_upload_dir(c, a):
+    local = Path(a.local)
+    if not local.is_dir():
+        die(f"not a directory: {local}")
+    if a.prune and not a.dry_run and not a.yes:
+        die("--prune deletes remote files that are not in the local tree: preview with --dry-run, then re-run with --yes")
+    stats = upload_dir(c, local, a.remote, excludes=a.exclude, prune=a.prune, dry_run=a.dry_run, log=lambda m: print(m, file=sys.stderr))
+    out_json(stats)
+
+
+def cmd_download_dir(c, a):
+    remote = norm_path(a.remote)
+    local = Path(a.local)
+    root = local.resolve()
+    n = 0
+    for e in list_tree(c, remote):
+        rel = e["path"][len(remote) + 1:]
+        dest = (local / rel).resolve()
+        if not rel or ".." in Path(rel).parts or not dest.is_relative_to(root):
+            die(f"refusing to write outside {local}: server returned path {e['path']!r}")
+        if e["is_dir"]:
+            dest.mkdir(parents=True, exist_ok=True)
+        else:
+            c.get_to_file(e["path"], dest)
+            n += 1
+            print(f"get  {e['path']}", file=sys.stderr)
+    print(f"downloaded {n} files to {local}")
+
+
+def cmd_tree(c, a):
+    entries = list_tree(c, a.path)
+    if a.json:
+        out_json(entries)
+    else:
+        print_entries(entries, long=a.long)
+
+
+def _xml_escape(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def cmd_search(c, a):
+    conds = []
+    if a.name:
+        pat = a.name if "%" in a.name else f"%{a.name}%"
+        conds.append(f"<d:like><d:prop><d:displayname/></d:prop><d:literal>{_xml_escape(pat)}</d:literal></d:like>")
+    if a.mime:
+        if a.mime.endswith("/"):
+            conds.append(f"<d:like><d:prop><d:getcontenttype/></d:prop><d:literal>{_xml_escape(a.mime)}%</d:literal></d:like>")
+        else:
+            conds.append(f"<d:eq><d:prop><d:getcontenttype/></d:prop><d:literal>{_xml_escape(a.mime)}</d:literal></d:eq>")
+    if a.min_size:
+        conds.append(f"<d:gt><d:prop><oc:size/></d:prop><d:literal>{int(a.min_size)}</d:literal></d:gt>")
+    if a.max_size:
+        conds.append(f"<d:lt><d:prop><oc:size/></d:prop><d:literal>{int(a.max_size)}</d:literal></d:lt>")
+    if a.after:
+        conds.append(f"<d:gt><d:prop><d:getlastmodified/></d:prop><d:literal>{_xml_escape(a.after)}</d:literal></d:gt>")
+    if a.files_only:
+        conds.append("<d:not><d:is-collection/></d:not>")  # d:resourcetype is not searchable; is-collection is
+    if not conds:
+        die("give at least one of --name/--mime/--min-size/--max-size/--after")
+    where = conds[0] if len(conds) == 1 else "<d:and>" + "".join(conds) + "</d:and>"
+    res = c.search(where, scope=a.path, limit=a.limit, order_prop="d:getlastmodified", descending=not a.asc)
+    if a.json:
+        out_json(res)
+    else:
+        print_entries(res, long=a.long)
+
+
+def cmd_providers(c, a):
+    out_json(c.ocs("GET", "/ocs/v2.php/search/providers"))
+
+
+# `mail` is left out by default: it answers HTTP 500 until a mail account is configured (use --provider mail).
+USEARCH_DEFAULT = ("files", "fulltextsearch", "contacts", "calendar", "search-deck-card-board", "search-deck-comment", "settings")
+
+
+def cmd_usearch(c, a):
+    providers = [a.provider] if a.provider else [p["id"] for p in c.ocs("GET", "/ocs/v2.php/search/providers") if p["id"] in USEARCH_DEFAULT]
+    results = {}
+    for pid in providers:
+        try:
+            r = c.ocs("GET", f"/ocs/v2.php/search/providers/{pid}/search", params={"term": a.term, "limit": a.limit})
+            results[pid] = r.get("entries", [])
+        except NcError as e:
+            results[pid] = {"error": str(e)}
+    if a.json:
+        out_json(results)
+    else:
+        for pid, entries in results.items():
+            if isinstance(entries, dict):
+                print(f"[{pid}] error: {entries['error']}")
+                continue
+            for e in entries:
+                print(f"[{pid}] {e.get('title')}  {e.get('subline', '')}  {e.get('resourceUrl', '')}")
+
+
+def cmd_trash(c, a):
+    base = f"{c.cfg.url}/remote.php/dav/trashbin/{urllib.parse.quote(c.cfg.user)}"
+    if a.action == "list":
+        body = ('<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">'
+                '<d:prop><nc:trashbin-filename/><nc:trashbin-original-location/><nc:trashbin-deletion-time/><d:getcontentlength/><d:resourcetype/><oc:size/></d:prop></d:propfind>')
+        st, h, data = c.dav("PROPFIND", base + "/trash/", body=body, headers={"Depth": "1", "Content-Type": "application/xml"}, ok=(207,))
+        entries = parse_multistatus(data, c.cfg.user)[1:]
+        for e in entries:
+            e["trash_name"] = os.path.basename(urllib.parse.unquote(e["href"]).rstrip("/"))
+            if e.get("trashbin_deletion_time"):
+                e["deleted_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(e["trashbin_deletion_time"])))
+        if a.json:
+            out_json(entries)
+        else:
+            for e in entries:
+                print(f"{e.get('deleted_at', '')}  {e.get('trashbin_original_location')}  [{e['trash_name']}]")
+    elif a.action == "restore":
+        name = a.name
+        c.dav("MOVE", f"{base}/trash/{urllib.parse.quote(name)}", headers={"Destination": f"{base}/restore/{urllib.parse.quote(name)}", "Overwrite": "T"}, ok=(201, 204))
+        print(f"restored {name}")
+    elif a.action == "delete":
+        confirm_or_die(a, "permanently delete from trash")
+        c.dav("DELETE", f"{base}/trash/{urllib.parse.quote(a.name)}", ok=(204,))
+        print(f"purged {a.name}")
+    elif a.action == "empty":
+        confirm_or_die(a, "empty trash")
+        c.dav("DELETE", f"{base}/trash/", ok=(204,))
+        print("trash emptied")
+
+
+def cmd_versions(c, a):
+    fid = c.fileid(a.path)
+    base = f"{c.cfg.url}/remote.php/dav/versions/{urllib.parse.quote(c.cfg.user)}"
+    if a.action == "list":
+        body = ('<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">'
+                '<d:prop><d:getcontentlength/><d:getlastmodified/><d:getcontenttype/><nc:version-label/><nc:version-author/></d:prop></d:propfind>')
+        st, h, data = c.dav("PROPFIND", f"{base}/versions/{fid}/", body=body, headers={"Depth": "1", "Content-Type": "application/xml"}, ok=(207,))
+        entries = parse_multistatus(data, c.cfg.user)[1:]
+        for e in entries:
+            e["version"] = os.path.basename(urllib.parse.unquote(e["href"]).rstrip("/"))
+        if a.json:
+            out_json(entries)
+        else:
+            for e in entries:
+                print(f"{e['version']:>12}  {e.get('mtime', '')}  {fmt_size(e.get('size'))}  label={e.get('version_label') or '-'}")
+    elif a.action == "restore":
+        c.dav("MOVE", f"{base}/versions/{fid}/{a.version}", headers={"Destination": f"{base}/restore/target", "Overwrite": "T"}, ok=(201, 204))
+        print(f"restored version {a.version} of {a.path}")
+    elif a.action == "get":
+        st, h, data = c.dav("GET", f"{base}/versions/{fid}/{a.version}", ok=(200,))
+        sys.stdout.buffer.write(data)
+
+
+def cmd_favorite(c, a):
+    if a.action == "list":
+        body = ('<?xml version="1.0"?><oc:filter-files xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">'
+                '<oc:filter-rules><oc:favorite>1</oc:favorite></oc:filter-rules>'
+                '<d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><oc:fileid/><oc:favorite/></d:prop></oc:filter-files>')
+        st, h, data = c.dav("REPORT", c.dav_files_url("/"), body=body, headers={"Content-Type": "application/xml"}, ok=(207,))
+        entries = parse_multistatus(data, c.cfg.user)
+        out_json(entries) if a.json else print_entries(entries)
+    else:
+        val = "1" if a.action == "on" else "0"
+        body = ('<?xml version="1.0"?><d:propertyupdate xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:set><d:prop>'
+                f'<oc:favorite>{val}</oc:favorite></d:prop></d:set></d:propertyupdate>')
+        c.dav("PROPPATCH", c.dav_files_url(a.path), body=body, headers={"Content-Type": "application/xml"}, ok=(207,))
+        print(f"favorite {a.action}: {a.path}")
+
+
+# ----------------------------------------------------------------------------- commands: shares
+SHARE_API = "/ocs/v2.php/apps/files_sharing/api/v1/shares"
+
+
+def share_brief(s):
+    t = int(s.get("share_type", -1))
+    return {
+        "id": s.get("id"), "type": SHARE_TYPE_NAMES.get(t, t), "path": s.get("path"), "item_type": s.get("item_type"),
+        "permissions": s.get("permissions"), "token": s.get("token"), "url": s.get("url"), "share_with": s.get("share_with"),
+        "label": s.get("label"), "expiration": s.get("expiration"), "password": bool(s.get("password")),
+        "file_source": s.get("file_source"), "uid_owner": s.get("uid_owner"), "hide_download": s.get("hide_download"),
+    }
+
+
+def resolve_perm(v):
+    if v is None:
+        return None
+    if str(v).isdigit():
+        return int(v)
+    if v in PERM_ALIASES:
+        return PERM_ALIASES[v]
+    die(f"unknown permission '{v}' (use a number or one of {', '.join(PERM_ALIASES)})")
+
+
+def cmd_share_list(c, a):
+    params = {}
+    if a.path:
+        params["path"] = norm_path(a.path)
+        params["reshares"] = "true"
+        if a.subfiles:
+            params["subfiles"] = "true"
+    if a.with_me:
+        params["shared_with_me"] = "true"
+    shares = c.ocs("GET", SHARE_API, params=params)
+    if a.path:
+        # path-filtered listings return token=null for link shares on external mounts or with reduced node permissions
+        for s in shares:
+            if int(s.get("share_type", -1)) == 3 and not s.get("token"):
+                try:
+                    full = c.ocs("GET", f"{SHARE_API}/{s['id']}")
+                    full = full[0] if isinstance(full, list) else full
+                    s["token"], s["url"] = full.get("token"), full.get("url")
+                except NcError:
+                    pass
+    if a.type:
+        want = SHARE_TYPES.get(a.type, a.type)
+        shares = [s for s in shares if str(s.get("share_type")) == str(want)]
+    if a.prefix:
+        shares = [s for s in shares if str(s.get("path", "")).startswith(a.prefix)]
+    if a.json:
+        out_json(shares if a.full else [share_brief(s) for s in shares])
+    else:
+        for s in shares:
+            b = share_brief(s)
+            extra = b["url"] or b["share_with"] or ""
+            print(f"{b['id']:>5} {b['type']:6} perm={b['permissions']:<3} {b['path']}  {extra}  {('label=' + b['label']) if b['label'] else ''}")
+
+
+def cmd_share_get(c, a):
+    data = c.ocs("GET", f"{SHARE_API}/{a.id}")
+    s = data[0] if isinstance(data, list) else data
+    out_json(s if a.full else share_brief(s))
+
+
+PUBLIC_SAFE_BITS = 1 | 16  # READ | SHARE (the server adds SHARE to read-only link shares itself: 1 -> 17)
+
+
+def _public_widening(perm) -> bool:
+    return perm is not None and bool(int(perm) & ~PUBLIC_SAFE_BITS)
+
+
+def cmd_share_create(c, a):
+    # JSON body; string-typed OCS parameters must stay strings (strict types), permissions/shareType are ints.
+    data = {"path": norm_path(a.path), "shareType": SHARE_TYPES[a.type]}
+    if a.type != "link" and a.type != "email":
+        if not a.with_:
+            die("--with <uid|gid|...> is required for this share type")
+        data["shareWith"] = a.with_
+    if a.type == "email":
+        data["shareWith"] = a.with_
+    perm = resolve_perm(a.perm)
+    if perm is not None:
+        data["permissions"] = perm
+    if a.password:
+        data["password"] = a.password
+    if a.expire:
+        data["expireDate"] = a.expire
+    if a.label:
+        data["label"] = a.label
+    if a.note:
+        data["note"] = a.note
+    if a.public_upload:
+        data["publicUpload"] = "true"
+    if a.type == "link" and (_public_widening(perm) or a.public_upload) and not a.yes:
+        die("this link share would let ANYONE with the URL write/upload/delete: confirm with the user, then re-run with --yes")
+    s = c.ocs("POST", SHARE_API, json_body=data)
+    if a.hide_download:
+        c.ocs("PUT", f"{SHARE_API}/{s['id']}", json_body={"hideDownload": "true"})
+        s["hide_download"] = 1
+    out_json(s if a.full else share_brief(s))
+
+
+def cmd_share_update(c, a):
+    fields = {"permissions": resolve_perm(a.perm), "password": a.password, "expireDate": a.expire, "label": a.label, "note": a.note,
+              "hideDownload": a.hide_download, "publicUpload": a.public_upload}
+    fields = {k: v for k, v in fields.items() if v is not None}
+    if a.clear_expire:
+        fields["expireDate"] = ""
+    if a.clear_password:
+        fields["password"] = ""
+    if not fields:
+        die("nothing to update")
+    risky = "permissions" in fields or a.public_upload == "true" or a.clear_password or a.clear_expire
+    if risky and not a.yes:
+        cur = c.ocs("GET", f"{SHARE_API}/{a.id}")
+        cur = cur[0] if isinstance(cur, list) else cur
+        if int(cur.get("share_type", -1)) == 3:
+            old = int(cur.get("permissions") or 0)
+            widen = "permissions" in fields and bool(fields["permissions"] & ~old & ~PUBLIC_SAFE_BITS)
+            if widen or a.public_upload == "true" or a.clear_password or a.clear_expire:
+                die("this change widens what anonymous visitors of a link share can do (write bits / upload / no password / no expiry): "
+                    "confirm with the user, then re-run with --yes")
+    last = None
+    for k, v in fields.items():  # the OCS share update endpoint applies one property per request
+        last = c.ocs("PUT", f"{SHARE_API}/{a.id}", json_body={k: v})
+    out_json(share_brief(last) if last else {})
+
+
+def cmd_share_delete(c, a):
+    confirm_or_die(a, f"delete share {a.id}")
+    c.ocs("DELETE", f"{SHARE_API}/{a.id}")
+    print(f"deleted share {a.id}")
+
+
+def cmd_sharees(c, a):
+    out_json(c.ocs("GET", "/ocs/v2.php/apps/files_sharing/api/v1/sharees", params={"search": a.term, "itemType": a.item_type, "perPage": a.limit, "lookup": "false"}))
+
+
+# ----------------------------------------------------------------------------- commands: raw links
+RAW_API = "/apps/files_sharing_raw/api/v1"
+
+
+def raw_get(c: Client, share_id):
+    return c.app_json("GET", f"{RAW_API}/raw-share/{int(share_id)}")
+
+
+def raw_set(c: Client, share_id, enabled=True, raw_only=None, csp=None):
+    """Enable/disable raw serving. raw_only=None and csp=None mean 'keep the current value'.
+
+    The app's POST handler treats an absent rawOnly as false, so we read the current state first. The app
+    reports rawOnly=false while a share is disabled, so after `raw disable` re-enabling resets rawOnly unless
+    raw_only=True is passed. An absent csp is preserved server-side (also across disable/enable); csp='' clears it
+    (-> hard fallback policy).
+    """
+    data = {"enabled": "1" if enabled else "0"}
+    if raw_only is None and enabled:
+        try:
+            cur = raw_get(c, share_id)
+            raw_only = bool(cur.get("enabled") and cur.get("rawOnly"))
+        except NcError:
+            raw_only = False
+    if raw_only is not None:
+        data["rawOnly"] = "1" if raw_only else "0"
+    if csp is not None:
+        data["csp"] = csp
+    return c.app_json("POST", f"{RAW_API}/raw-share/{int(share_id)}", data=data)
+
+
+def raw_list_for_path(c: Client, path):
+    fid = c.fileid(path)
+    return c.app_json("GET", f"{RAW_API}/raw-shares/{fid}")
+
+
+def resolve_csp(a):
+    if getattr(a, "csp", None) is not None:
+        return a.csp
+    if getattr(a, "preset", None):
+        if a.preset not in CSP_PRESETS:
+            die(f"unknown preset {a.preset}; choose from {', '.join(CSP_PRESETS)}")
+        return CSP_PRESETS[a.preset]
+    return None
+
+
+def cmd_raw_get(c, a):
+    out_json(raw_get(c, a.share_id))
+
+
+def cmd_raw_enable(c, a):
+    print("warning: raw links are fully public: anyone with the URL can fetch the content, the share password is NOT checked "
+          "(expiry is). Do not enable raw for anything private.", file=sys.stderr)
+    doc = raw_set(c, a.share_id, True, raw_only=True if a.raw_only else (False if a.no_raw_only else None), csp=resolve_csp(a))
+    out_json(doc)
+
+
+def cmd_raw_disable(c, a):
+    out_json(raw_set(c, a.share_id, False))
+
+
+def cmd_raw_list(c, a):
+    out_json(raw_list_for_path(c, a.path))
+
+
+def cmd_raw_presets(c, a):
+    out_json(CSP_PRESETS)
+
+
+def cmd_raw_url(c, a):
+    doc = raw_get(c, a.share_id)
+    base = doc["rawUrl"]
+    print(base + ("/" + a.path.strip("/") if a.path else ""))
+
+
+# ----------------------------------------------------------------------------- commands: users / groups / apps (OCS provisioning; admin)
+def cmd_user(c, a):
+    base = "/ocs/v2.php/cloud/users"
+    if a.action == "list":
+        params = {"search": a.search} if a.search else {}
+        params["limit"] = a.limit
+        out_json(c.ocs("GET", base, params=params)["users"])
+    elif a.action == "get":
+        out_json(c.ocs("GET", f"{base}/{urllib.parse.quote(a.uid)}"))
+    elif a.action == "create":
+        confirm_or_die(a, f"create user {a.uid}")
+        data = {"userid": a.uid, "password": a.password, "displayName": a.display_name, "email": a.email, "quota": a.quota,
+                "groups": a.group}
+        out_json(c.ocs("POST", base, json_body={k: v for k, v in data.items() if v is not None}))
+    elif a.action == "set":
+        if a.key == "password":
+            confirm_or_die(a, f"change the password of {a.uid}")
+        out_json(c.ocs("PUT", f"{base}/{urllib.parse.quote(a.uid)}", json_body={"key": a.key, "value": a.value}))
+    elif a.action in ("enable", "disable"):
+        out_json(c.ocs("PUT", f"{base}/{urllib.parse.quote(a.uid)}/{a.action}"))
+    elif a.action == "delete":
+        confirm_or_die(a, f"delete user {a.uid}")
+        out_json(c.ocs("DELETE", f"{base}/{urllib.parse.quote(a.uid)}"))
+    elif a.action == "groups":
+        out_json(c.ocs("GET", f"{base}/{urllib.parse.quote(a.uid)}/groups"))
+    elif a.action == "addgroup":
+        out_json(c.ocs("POST", f"{base}/{urllib.parse.quote(a.uid)}/groups", data={"groupid": a.gid}))
+    elif a.action == "rmgroup":
+        out_json(c.ocs("DELETE", f"{base}/{urllib.parse.quote(a.uid)}/groups", data={"groupid": a.gid}))
+
+
+def cmd_group(c, a):
+    base = "/ocs/v2.php/cloud/groups"
+    if a.action == "list":
+        out_json(c.ocs("GET", base, params={"search": a.search} if a.search else None)["groups"])
+    elif a.action == "members":
+        out_json(c.ocs("GET", f"{base}/{urllib.parse.quote(a.gid)}")["users"])
+    elif a.action == "create":
+        out_json(c.ocs("POST", base, data={"groupid": a.gid}))
+    elif a.action == "delete":
+        confirm_or_die(a, f"delete group {a.gid}")
+        out_json(c.ocs("DELETE", f"{base}/{urllib.parse.quote(a.gid)}"))
+
+
+def cmd_app(c, a):
+    base = "/ocs/v2.php/cloud/apps"
+    if a.action == "list":
+        out_json(c.ocs("GET", base, params={"filter": a.filter} if a.filter else None)["apps"])
+    elif a.action == "info":
+        out_json(c.ocs("GET", f"{base}/{a.appid}"))
+    elif a.action == "enable":
+        confirm_or_die(a, f"enable app {a.appid}")
+        out_json(c.ocs("POST", f"{base}/{a.appid}"))
+    elif a.action == "disable":
+        confirm_or_die(a, f"disable app {a.appid}")
+        out_json(c.ocs("DELETE", f"{base}/{a.appid}"))
+
+
+# ----------------------------------------------------------------------------- commands: notifications / activity / webhooks
+def cmd_notifications(c, a):
+    base = "/ocs/v2.php/apps/notifications/api/v2/notifications"
+    if a.action == "list":
+        out_json(c.ocs("GET", base))
+    elif a.action == "delete":
+        out_json(c.ocs("DELETE", f"{base}/{a.id}"))
+    elif a.action == "clear":
+        confirm_or_die(a, "delete all notifications")
+        out_json(c.ocs("DELETE", base))
+
+
+def cmd_activity(c, a):
+    params = {"limit": a.limit, "object_type": a.object_type, "object_id": a.object_id, "since": a.since}
+    path = "/ocs/v2.php/apps/activity/api/v2/activity" + (f"/{a.filter}" if a.filter else "")
+    out_json(c.ocs("GET", path, params={k: v for k, v in params.items() if v}, ok=(200, 304)))
+
+
+def cmd_webhook(c, a):
+    base = "/ocs/v2.php/apps/webhook_listeners/api/v1/webhooks"
+    if a.action == "list":
+        out_json(c.ocs("GET", base))
+    elif a.action == "create":
+        confirm_or_die(a, f"register a webhook that sends {a.event} events to {a.uri}")
+
+        def _json_arg(name, raw):
+            if raw is None:
+                return None
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError as e:
+                die(f"--{name} must be a JSON object: {e}")
+
+        data = {"httpMethod": a.method, "uri": a.uri, "event": a.event, "userIdFilter": a.user_filter, "authMethod": a.auth_method,
+                "authData": _json_arg("auth-data", a.auth_data), "eventFilter": _json_arg("filter", a.filter), "headers": _json_arg("headers", a.headers)}
+        out_json(c.ocs("POST", base, json_body={k: v for k, v in data.items() if v is not None}))
+    elif a.action == "delete":
+        confirm_or_die(a, f"delete webhook {a.id}")
+        out_json(c.ocs("DELETE", f"{base}/{a.id}"))
+
+
+# ----------------------------------------------------------------------------- commands: occ / mcp / call
+# occ is deny-by-default: only these read-only commands run without --yes. Everything else changes state
+# (or can, depending on arguments) and needs --yes, which the agent may only pass after the user asked for it.
+OCC_READ_ONLY = frozenset("""
+status check setupchecks list help app:list app:getpath
+user:list user:info user:report user:lastseen user:auth-tokens:list user:keys:verify group:list group:info
+config:list config:system:get config:app:get share:list
+files:get files:mount:list files:reminders files:recommendations:recommend
+info:file info:file:space info:storage info:storages log:tail log:watch router:list router:match
+security:bruteforce:attempts security:certificates background-job:list webhook_listeners:list
+taskprocessing:task:list taskprocessing:task:get taskprocessing:task:stats
+fulltextsearch:check fulltextsearch:test fulltextsearch:search groupfolders:list
+files_external:list files_external:backends files_external:verify files_external:dependencies
+dav:list-addressbooks dav:list-calendar-shares dav:list-calendars dav:list-subscriptions
+preview:queue-stats update:check twofactorauth:state integrity:check-app integrity:check-core admin-delegation:show
+trashbin:size maintenance:mode
+""".split())
+OCC_INDEX = Path(__file__).resolve().parent.parent / "references" / "occ_commands.generated.txt"
+OCC_INFO_FLAGS = {"-h", "--help", "-V", "--version"}
+
+
+def occ_known_commands(c: Client | None = None) -> set[str]:
+    """Full command names from the shipped index; falls back to the live `occ list` for commands added later."""
+    known = set()
+    if OCC_INDEX.is_file():
+        known = {ln.split()[0] for ln in OCC_INDEX.read_text(encoding="utf-8").splitlines() if ln.strip()}
+    if c is not None:
+        r = c.occ(["list", "--format=json"])
+        if r.returncode == 0:
+            try:
+                known |= {x["name"] for x in json.loads(r.stdout.decode("utf-8", "replace")).get("commands", [])}
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+    return known
+
+
+def occ_command_name(args: list[str]) -> tuple[str | None, list[str]]:
+    """Skip leading global options (-n, -q, -v, --no-ansi, ...); return (command, its arguments)."""
+    for i, x in enumerate(args):
+        if not x.startswith("-"):
+            return x, args[i + 1:]
+    return None, []
+
+
+def occ_is_read_only(cmd: str, rest: list[str]) -> bool:
+    if cmd not in OCC_READ_ONLY:
+        return False
+    if cmd == "maintenance:mode":  # query form only
+        return not any(x in ("--on", "--off") for x in rest)
+    if cmd == "trashbin:size":  # query form only: a positional size sets it
+        vals = [x for i, x in enumerate(rest) if not x.startswith("-") and not (i and rest[i - 1] in ("--user", "-u"))]
+        return not vals
+    if cmd == "config:list":  # --private prints passwords and secrets
+        return "--private" not in rest
+    return True
+
+
+def cmd_occ(c, a):
+    args = list(a.args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if not args:
+        die("usage: ncloud occ [--yes] -- <occ-command> [args...]   (e.g. ncloud occ -- status --output=json)")
+    cmd, rest = occ_command_name(args)
+    if cmd is None:
+        if not set(args) <= OCC_INFO_FLAGS | {"-n", "--no-interaction", "-q", "--quiet", "--no-ansi", "--ansi"}:
+            die(f"no occ command in {args}")
+    else:
+        # Symfony accepts unambiguous abbreviations ("user:del" -> user:delete); require the full name so the guard sees it.
+        if cmd not in occ_known_commands() and cmd not in occ_known_commands(c):
+            die(f"'{cmd}' is not a full occ command name (abbreviations are rejected); see references/occ_commands.generated.txt "
+                "or `ncloud occ -- list <namespace>`")
+        if not occ_is_read_only(cmd, rest) and not a.yes:
+            die(f"'{cmd}' is not on the read-only allow-list: it changes server state (or exposes secrets). "
+                "Run it only when the user asked for it, then re-run with --yes")
+    if a.print_only:
+        print(" ".join(shlex.quote(x) for x in c.occ_argv(args)))
+        return
+    input_data = sys.stdin.buffer.read() if a.stdin else None
+    r = c.occ(args, input_data=input_data, capture=False)
+    sys.exit(r.returncode)
+
+
+MCP_SECRET_NAME = "mcp-basic.b64"            # base64("user:app-password"), no newline, chmod 600
+
+
+def mcp_secret_path() -> Path:
+    return env_file_candidates()[0].parent / MCP_SECRET_NAME
+
+
+def mcp_basic_value(c: Client) -> str:
+    p = mcp_secret_path()
+    if p.is_file():
+        return p.read_text().strip()
+    c.cfg.require_password()
+    return base64.b64encode(f"{c.cfg.user}:{c.cfg.password}".encode()).decode()
+
+
+def mcp_health_url(url: str) -> str:
+    return url.rsplit("/mcp", 1)[0] + "/health/ready"
+
+
+def mcp_secret_allowed(url: str, extra_hosts=()) -> bool:
+    """The Basic secret may travel over plain http only to the local sidecar (loopback or its container name)."""
+    u = urllib.parse.urlsplit(url)
+    local = {"127.0.0.1", "localhost", "::1", *extra_hosts}
+    return u.scheme == "https" or (u.scheme == "http" and (u.hostname or "") in local)
+
+
+def mcp_create_argv(cfg: Config) -> list[str]:
+    """`docker create` for the sidecar: cbcoutinho/nextcloud-mcp-server in multi_user_basic (credential pass-through)
+    mode, so the container stores no Nextcloud credential and every MCP request must carry Basic auth."""
+    name, port = cfg.mcp_container, cfg.mcp_port
+    env = {
+        "NEXTCLOUD_HOST": cfg.url,
+        "MCP_DEPLOYMENT_MODE": "multi_user_basic",       # never single-user: that mode serves /mcp unauthenticated
+        "NEXTCLOUD_VERIFY_SSL": "false" if cfg.insecure else "true",
+        "MCP_DNS_REBINDING_PROTECTION": "true",           # reject unknown Host headers (421)
+        "MCP_ALLOWED_HOSTS": f"{name}:*,127.0.0.1:*,localhost:*",
+        "CORS_ALLOW_ORIGINS": f"http://127.0.0.1:{port}",  # no browser clients
+        "METRICS_ENABLED": "false",
+        "OTEL_SERVICE_NAME": name,
+    }
+    argv = ["docker", "create", "--name", name, "--init", "--restart", "no", "--stop-timeout", "15",
+            "-p", f"127.0.0.1:{port}:8000", "--cap-drop", "ALL", "--read-only", "--tmpfs", "/tmp",
+            "--security-opt", "no-new-privileges:true",
+            "--health-cmd", "curl -fsS http://127.0.0.1:8000/health/ready", "--health-interval", "30s",
+            "--health-timeout", "5s", "--health-start-period", "20s", "--health-retries", "3"]
+    if cfg.mcp_network:
+        argv += ["--network", cfg.mcp_network]
+    for k, v in env.items():
+        argv += ["-e", f"{k}={v}"]
+    argv += [cfg.mcp_image, "--transport", "streamable-http", "--port", "8000"]
+    for app in cfg.mcp_apps:
+        argv += ["--enable-app", app]
+    return argv
+
+
+def cmd_mcp(c, a):
+    """On-demand MCP sidecar: create once, start when an agent needs MCP, stop when done.
+
+    The sidecar runs cbcoutinho/nextcloud-mcp-server in multi_user_basic (pass-through) mode:
+    every request needs `Authorization: Basic base64(user:app-password)`; the container stores nothing.
+    """
+    cfg = c.cfg
+    name = cfg.mcp_container
+    url = a.url or c.mcp_url()
+    sid = a.id
+    if a.action == "credential":
+        p = mcp_secret_path()
+        if a.write:
+            c.cfg.require_password()
+            # every MCP tool call replays this secret: a wrong one means one 401 per call (bruteforce bucket) -> verify first
+            c.ocs("GET", "/ocs/v2.php/cloud/user")
+            write_secret(p, base64.b64encode(f"{c.cfg.user}:{c.cfg.password}".encode()).decode())
+            print(f"wrote {p} (base64 of user:app-password, mode 600; verified against {c.cfg.url})")
+        else:
+            print(f"secret file: {p} ({'exists' if p.is_file() else 'missing; run `ncloud mcp credential --write`'})")
+            print("header value: Basic <base64(user:app-password)>  (use --write, never paste it into chat)")
+        return
+    if a.action == "create":
+        if cfg.missing():
+            die(f"{', '.join(cfg.missing())} not set")
+        exists = subprocess.run(c.docker_argv(["docker", "inspect", "-f", "{{.State.Status}}", name]), capture_output=True, text=True)
+        if exists.returncode == 0:
+            if not a.recreate:
+                die(f"container {name} already exists ({exists.stdout.strip()}); `ncloud mcp start` it, or --recreate --yes")
+            confirm_or_die(a, f"remove and recreate container {name}")
+            subprocess.run(c.docker_argv(["docker", "rm", "-f", name]), capture_output=True)
+        argv = c.docker_argv(mcp_create_argv(cfg))
+        if a.print_only:
+            print(" ".join(shlex.quote(x) for x in argv))
+            return
+        r = subprocess.run(argv, capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"docker create failed: {r.stderr.strip()[:400]}")
+        print(f"created {name} (stopped; image {cfg.mcp_image}; 127.0.0.1:{cfg.mcp_port}"
+              + (f", network {cfg.mcp_network}" if cfg.mcp_network else "") + "): `ncloud mcp start` when needed")
+        return
+    if a.action in ("start", "stop"):
+        argv = c.docker_argv(["docker", a.action, name])
+        r = subprocess.run(argv, capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"{' '.join(argv)} failed: {r.stderr.strip()[:300]} (first time: `ncloud mcp create`)")
+        if a.action == "stop":
+            print(f"stopped {name}")
+            return
+        health = mcp_health_url(url)
+        for _ in range(60):  # cold start takes ~20s (python imports + alembic)
+            try:
+                st, h, body = c.request("GET", health, auth=False)
+                if st == 200:
+                    try:
+                        mode = json.loads(body).get("checks", {}).get("auth_mode")
+                    except (json.JSONDecodeError, AttributeError):
+                        mode = None
+                    if mode != "multi_user_basic":
+                        # any other mode (e.g. single-user basic from credentials in its env) serves /mcp WITHOUT auth
+                        subprocess.run(c.docker_argv(["docker", "stop", name]), capture_output=True)
+                        die(f"{name} reports auth_mode={mode!r}, expected 'multi_user_basic': stopped it again. "
+                            "Recreate it with `ncloud mcp create --recreate --yes` (it must not hold NEXTCLOUD_USERNAME/PASSWORD)")
+                    print(f"started {name}: {body.decode('utf-8', 'replace')[:300]}")
+                    print(f"mcp url: {url}")
+                    return
+            except NcError:
+                pass
+            time.sleep(1)
+        die(f"{name} started but {health} did not become ready in 60s (docker logs {name})")
+    if a.action == "status":
+        try:
+            st, h, body = c.request("GET", mcp_health_url(url), auth=False)
+            print(f"health: HTTP {st} {body.decode('utf-8', 'replace')[:300]}")
+        except NcError as e:
+            print(f"{url}: unreachable ({e}); start it with `ncloud mcp start`")
+            sys.exit(2)
+        if not mcp_secret_allowed(url, (name,)):
+            die(f"refusing to send the Basic secret over plain http to {url} (only 127.0.0.1/localhost/{name} or https)")
+        init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "ncloud", "version": VERSION}}}
+        st, h, body = c.request("POST", url, data=json.dumps(init), auth=False,
+                                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                                         "Authorization": "Basic " + mcp_basic_value(c)})
+        text = body.decode("utf-8", "replace")
+        server = ""
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                try:
+                    server = json.loads(line[5:]).get("result", {}).get("serverInfo", {}).get("name", "")
+                except json.JSONDecodeError:
+                    pass
+        print(f"initialize: HTTP {st} {h.get('content-type', '')} server={server or text[:120]!r}")
+        sys.exit(0 if st == 200 else 2)
+    # snippet
+    secret = mcp_secret_path()
+    if a.runtime == "generic":
+        print(f"""# Register an HTTP (streamable) MCP server in your agent runtime, only for the task at hand:
+#   url:     {url}
+#   header:  Authorization: Basic <contents of {secret}>
+# Prefer a runtime feature that reads the header value from that file (or an env var) at call time,
+# so the secret never lands in a config file or the transcript. Unregister when done, then `ncloud mcp stop`.
+# On authentication errors/401: unregister immediately (each retry is a failed login), fix the secret.
+#
+# read-first fallback without the sidecar (stdio, 23 tools, never deletes; needs Python >= 3.13 via uv):
+#   command: uvx --from git+https://github.com/street1983nk/nextcloud-mcp-connector@v0.5.0 nc-mcp
+#   env:     NC_MCP_URL={c.cfg.url}  NC_MCP_USER={c.cfg.user}  NC_MCP_APP_PASSWORD=<app password>""")
+    elif a.runtime == "claude":
+        print(f"""# Claude Code, session-only (the secret is never written to Claude's settings):
+cat > /tmp/nextcloud-mcp.json <<'EOF'
+{{"mcpServers":{{"{sid}":{{"type":"http","url":"{url}","headers":{{"Authorization":"Basic ${{NC_MCP_BASIC}}"}}}}}}}}
+EOF
+NC_MCP_BASIC=$(cat {secret}) claude --mcp-config /tmp/nextcloud-mcp.json --strict-mcp-config
+
+# NOT recommended: persistent add copies the secret into Claude's settings (remove it right after the task):
+#   claude mcp add --transport http --scope user {sid} {url} --header "Authorization: Basic $(cat {secret})"
+#   claude mcp remove {sid} --scope user
+
+# stdio, read-first fallback (no sidecar), also session-only (needs NEXTCLOUD_APP_PASSWORD exported):
+cat > /tmp/nextcloud-mcp-ro.json <<'EOF'
+{{"mcpServers":{{"{sid}-ro":{{"type":"stdio","command":"uvx","args":["--from","git+https://github.com/street1983nk/nextcloud-mcp-connector@v0.5.0","nc-mcp"],"env":{{"NC_MCP_URL":"{c.cfg.url}","NC_MCP_USER":"{c.cfg.user}","NC_MCP_APP_PASSWORD":"${{NEXTCLOUD_APP_PASSWORD}}"}}}}}}}}
+EOF
+claude --mcp-config /tmp/nextcloud-mcp-ro.json --strict-mcp-config""")
+    elif a.runtime == "mcporter":
+        print(f"""# mcporter (scripted calls; --allow-http is required for ad-hoc plain http URLs)
+export NC_MCP_BASIC=$(cat {secret})
+mcporter list --http-url {url} --allow-http --header "Authorization=Basic $NC_MCP_BASIC" --schema
+mcporter call --http-url {url} --allow-http --header "Authorization=Basic $NC_MCP_BASIC" --tool nc_webdav_list_directory --args '{{"path":""}}' --output json
+
+# or persist in ~/.mcporter/mcporter.json (placeholder resolved at call time), remove when done:
+mcporter config add {sid} --url {url} --header 'Authorization=Basic ${{NC_MCP_BASIC}}' --scope home
+mcporter call {sid}.nc_webdav_list_directory path=""
+mcporter config remove {sid}""")
+
+
+def cmd_call(c, a):
+    path = a.path
+    auth = not a.no_auth
+    if urllib.parse.urlsplit(path).scheme:
+        url = path
+        if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+            die(f"unsupported URL scheme: {url}")
+        if origin_of(url) != origin_of(c.cfg.url) and auth:
+            # never hand the full-account app password to another host (typo, injected instruction, ...)
+            die(f"refusing to send credentials to a foreign origin ({url}); add --no-auth to send the request without Authorization")
+    else:
+        url = c.cfg.url + "/" + path.lstrip("/")
+    if a.method.upper() == "DELETE":
+        confirm_or_die(a, f"DELETE {url}")
+    headers = {"OCS-APIRequest": "true"}
+    for h in a.header or []:
+        k, v = h.split(":", 1)
+        headers[k.strip()] = v.strip()
+    body = None
+    if a.json_file:
+        body = Path(a.json_file).read_text() if a.json_file != "-" else sys.stdin.read()
+        headers.setdefault("Content-Type", "application/json")
+    elif a.data:
+        pairs = [tuple(d.split("=", 1)) if "=" in d else (d, "") for d in a.data]
+        body = urllib.parse.urlencode(pairs)
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    elif a.body_file:
+        body = Path(a.body_file).read_bytes() if a.body_file != "-" else sys.stdin.buffer.read()
+    if a.ocs and "?" not in url and "/ocs/" in url:
+        url += "?format=json"
+    elif a.ocs and "/ocs/" in url and "format=" not in url:
+        url += "&format=json"
+    st, h, data = c.request(a.method.upper(), url, data=body, headers=headers, auth=auth)
+    print(f"HTTP {st}", file=sys.stderr)
+    if a.headers_out:
+        for k, v in h.items():
+            print(f"{k}: {v}", file=sys.stderr)
+    sys.stdout.buffer.write(data if isinstance(data, bytes) else data.read())
+    if isinstance(data, bytes) and not data.endswith(b"\n"):
+        print()
+    sys.exit(0 if st < 400 else 3)
+
+
+def cmd_config(c, a):
+    target = env_file_candidates()[0]  # $NEXTCLOUD_USE_ENV if set, else $XDG_CONFIG_HOME/nextcloud-use/env (~/.config fallback)
+    if a.action == "path":
+        print(target)
+        return
+    cfg = c.cfg
+    if a.action == "show":
+        occ_mode = c.occ_mode()
+        out_json({"url": cfg.url or None, "user": cfg.user or None, "password": "set" if cfg.password else None,
+                  "missing": cfg.missing(), "env_file": cfg.env_file_used, "env_error": cfg.env_error,
+                  "occ_mode": occ_mode, "occ_ssh_host": cfg.occ_host, "occ_container": cfg.occ_container, "occ_command": cfg.occ_command,
+                  "mcp_url": c.mcp_url(), "mcp_container": cfg.mcp_container, "mcp_network": cfg.mcp_network,
+                  "notes_file": str(cfg.notes_file), "notes_present": cfg.notes_file.is_file()})
+        return
+    if a.action == "notes":
+        if cfg.notes_file.is_file():
+            sys.stdout.write(cfg.notes_file.read_text(encoding="utf-8"))
+        else:
+            print(f"no site notes ({cfg.notes_file}); create it to record instance-specific rules for agents", file=sys.stderr)
+        return
+    url, user = a.url or a.nc_url, a.user_ or a.nc_user
+    if not url or not user:
+        die("config init needs --url and --user (the skill ships no instance defaults)")
+    if target.exists() and not a.force:
+        die(f"{target} exists; use --force to overwrite")
+    lines = ["# nextcloud-use settings (chmod 600; never commit)", f"NEXTCLOUD_URL={url.rstrip('/')}", f"NEXTCLOUD_USER={user}",
+             f"NEXTCLOUD_APP_PASSWORD={a.app_password or '<paste an app password: Settings > Security > Devices & sessions>'}"]
+    lines.append(f"NEXTCLOUD_OCC_SSH_HOST={a.occ_ssh_host}" if a.occ_ssh_host else "# NEXTCLOUD_OCC_SSH_HOST=<ssh alias of the Nextcloud host>")
+    lines += ["# NEXTCLOUD_OCC_MODE=auto            # auto | local | ssh | off",
+              f"# NEXTCLOUD_OCC_CONTAINER={DEFAULT_OCC_CONTAINER}",
+              "# NEXTCLOUD_OCC_COMMAND=sudo -u www-data php /var/www/nextcloud/occ   # non-docker installs",
+              "# NEXTCLOUD_MCP_NETWORK=<docker network shared with agent containers>"]
+    write_secret(target, "\n".join(lines) + "\n")
+    print(f"wrote {target} (mode 600)")
+
+
+def cmd_app_password(c, a):
+    """Mint an app password with occ (OCS getapppassword refuses when you are already using an app password).
+
+    Without the login password occ still creates a token ("limited capabilities": operations that need the
+    login password, e.g. server-side encryption key handling, fail; WebDAV/OCS work). To create a full token,
+    run on the host:  docker exec -e NC_PASS=<login password> -u www-data nextcloud-aio-nextcloud php occ \\
+                      user:auth-tokens:add <uid> --name <name> --password-from-env
+    """
+    uid = a.uid or c.cfg.user
+    confirm_or_die(a, f"mint a new full-account app password for {uid}")
+    r = c.occ(["user:auth-tokens:add", uid, "--name", a.name, "-n"], input_data=None)
+    out = r.stdout.decode("utf-8", "replace")
+    if r.returncode != 0:
+        die((r.stderr.decode("utf-8", "replace") + out).strip() or "occ user:auth-tokens:add failed")
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    token = lines[-1] if lines else ""
+    if a.json:
+        out_json({"uid": uid, "name": a.name, "app_password": token})
+    else:
+        print(token)
+        print("# shown once: store it in a 0600 file (ncloud config init --force --app-password ...), never in chat or git", file=sys.stderr)
+        print(f"# token '{a.name}' for {uid}; list: ncloud occ -- user:auth-tokens:list {uid} --output=json ; revoke: ncloud occ --yes -- user:auth-tokens:delete {uid} <id>", file=sys.stderr)
+
+
+# ----------------------------------------------------------------------------- argparse
+def build_parser():
+    p = argparse.ArgumentParser(prog="ncloud", description="Nextcloud CLI for agents (WebDAV + OCS + raw links + occ + MCP helpers)")
+    p.add_argument("--url", dest="nc_url", help="override NEXTCLOUD_URL (before the subcommand)")
+    p.add_argument("--user", dest="nc_user", help="override NEXTCLOUD_USER (before the subcommand)")
+    p.add_argument("--password", dest="nc_password", help="override NEXTCLOUD_APP_PASSWORD (before the subcommand; prefer env/env file)")
+    p.add_argument("--version", action="version", version=VERSION)
+    sp = p.add_subparsers(dest="cmd", metavar="<command>")
+
+    def add(name, fn, help_, **kw):
+        s = sp.add_parser(name, help=help_, **kw)
+        s.set_defaults(fn=fn)
+        return s
+
+    s = add("doctor", cmd_doctor, "check config, auth, sharing, WebDAV, raw app, occ"); s.add_argument("--deep", action="store_true"); s.add_argument("--json", action="store_true")
+    add("whoami", cmd_whoami, "OCS /cloud/user for the configured account")
+    add("status", cmd_status, "GET /status.php (no auth)")
+    s = add("caps", cmd_caps, "capabilities (e.g. --section files_sharing.public)"); s.add_argument("--section"); s.add_argument("--full", action="store_true")
+
+    s = add("ls", cmd_ls, "list a folder (PROPFIND)"); s.add_argument("path", nargs="?", default="/"); s.add_argument("--depth", default="1"); s.add_argument("-l", "--long", action="store_true"); s.add_argument("--json", action="store_true")
+    s = add("tree", cmd_tree, "recursive listing"); s.add_argument("path"); s.add_argument("-l", "--long", action="store_true"); s.add_argument("--json", action="store_true")
+    s = add("stat", cmd_stat, "properties of one path"); s.add_argument("path"); s.add_argument("--json", action="store_true")
+    s = add("fileid", cmd_fileid, "print the fileid of a path"); s.add_argument("path")
+    s = add("path", cmd_path, "print the path of a fileid"); s.add_argument("fileid")
+    s = add("get", cmd_get, "download a file (stdout or file)"); s.add_argument("path"); s.add_argument("out", nargs="?")
+    s = add("put", cmd_put, "upload a file (local path or - for stdin)"); s.add_argument("local"); s.add_argument("path"); s.add_argument("--no-mtime", action="store_true")
+    s = add("mkdir", cmd_mkdir, "create a folder"); s.add_argument("path"); s.add_argument("-p", "--parents", action="store_true")
+    s = add("rm", cmd_rm, "delete a file/folder (to trash)"); s.add_argument("path"); s.add_argument("--yes", action="store_true")
+    s = add("mv", cmd_mv, "move/rename"); s.add_argument("src"); s.add_argument("dst"); s.add_argument("--overwrite", action="store_true")
+    s = add("cp", cmd_cp, "copy"); s.add_argument("src"); s.add_argument("dst"); s.add_argument("--overwrite", action="store_true")
+    s = add("upload-dir", cmd_upload_dir, "upload a local directory tree"); s.add_argument("local"); s.add_argument("remote"); s.add_argument("--exclude", action="append", default=[]); s.add_argument("--prune", action="store_true", help="delete remote files that are not in local (needs --yes unless --dry-run)"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--yes", action="store_true")
+    s = add("download-dir", cmd_download_dir, "download a folder tree"); s.add_argument("remote"); s.add_argument("local")
+    s = add("search", cmd_search, "WebDAV SEARCH by name/mime/size/date"); s.add_argument("--path", default="/"); s.add_argument("--name"); s.add_argument("--mime"); s.add_argument("--min-size", type=int); s.add_argument("--max-size", type=int); s.add_argument("--after", help="RFC1123/ISO date, e.g. 2026-01-01T00:00:00Z"); s.add_argument("--files-only", action="store_true"); s.add_argument("--limit", type=int, default=50); s.add_argument("--asc", action="store_true"); s.add_argument("-l", "--long", action="store_true"); s.add_argument("--json", action="store_true")
+    add("providers", cmd_providers, "unified search providers")
+    s = add("usearch", cmd_usearch, "unified search (files, fulltext, contacts, calendar, deck, mail...)"); s.add_argument("term"); s.add_argument("--provider"); s.add_argument("--limit", type=int, default=10); s.add_argument("--json", action="store_true")
+    s = add("trash", cmd_trash, "trash bin: list | restore <name> | delete <name> --yes | empty --yes"); s.add_argument("action", choices=["list", "restore", "delete", "empty"]); s.add_argument("name", nargs="?"); s.add_argument("--yes", action="store_true"); s.add_argument("--json", action="store_true")
+    s = add("versions", cmd_versions, "file versions: list <path> | get <path> <version> | restore <path> <version>"); s.add_argument("action", choices=["list", "get", "restore"]); s.add_argument("path"); s.add_argument("version", nargs="?"); s.add_argument("--json", action="store_true")
+    s = add("favorite", cmd_favorite, "favorites: list | on <path> | off <path>"); s.add_argument("action", choices=["list", "on", "off"]); s.add_argument("path", nargs="?"); s.add_argument("--json", action="store_true")
+
+    sh = add("share", None, "shares (OCS sharing API)").add_subparsers(dest="share_cmd", metavar="<action>")
+    s = sh.add_parser("list", help="list my shares"); s.set_defaults(fn=cmd_share_list); s.add_argument("--path"); s.add_argument("--subfiles", action="store_true"); s.add_argument("--prefix", help="client-side path prefix filter, e.g. /filehost/"); s.add_argument("--type", choices=list(SHARE_TYPES)); s.add_argument("--with-me", action="store_true"); s.add_argument("--json", action="store_true"); s.add_argument("--full", action="store_true")
+    s = sh.add_parser("get", help="one share by id"); s.set_defaults(fn=cmd_share_get); s.add_argument("id"); s.add_argument("--full", action="store_true")
+    s = sh.add_parser("create", help="create a share"); s.set_defaults(fn=cmd_share_create); s.add_argument("path"); s.add_argument("--type", default="link", choices=list(SHARE_TYPES)); s.add_argument("--with", dest="with_", help="uid / gid / email / federated id"); s.add_argument("--perm", help="1 read, 15 edit, 4 file-drop, 31 all; or ro/rw/upload/full"); s.add_argument("--password"); s.add_argument("--expire", help="YYYY-MM-DD"); s.add_argument("--label"); s.add_argument("--note"); s.add_argument("--public-upload", action="store_true"); s.add_argument("--hide-download", action="store_true"); s.add_argument("--full", action="store_true"); s.add_argument("--yes", action="store_true", help="confirm a link share that grants anonymous write/upload")
+    s = sh.add_parser("update", help="update share fields"); s.set_defaults(fn=cmd_share_update); s.add_argument("id"); s.add_argument("--perm"); s.add_argument("--password"); s.add_argument("--clear-password", action="store_true"); s.add_argument("--expire"); s.add_argument("--clear-expire", action="store_true"); s.add_argument("--label"); s.add_argument("--note"); s.add_argument("--hide-download", choices=["true", "false"]); s.add_argument("--public-upload", choices=["true", "false"]); s.add_argument("--yes", action="store_true", help="confirm widening a link share (write bits, upload, no password/expiry)")
+    s = sh.add_parser("delete", help="delete a share"); s.set_defaults(fn=cmd_share_delete); s.add_argument("id"); s.add_argument("--yes", action="store_true")
+    s = sh.add_parser("sharees", help="look up users/groups/remotes to share with"); s.set_defaults(fn=cmd_sharees); s.add_argument("term"); s.add_argument("--item-type", default="file"); s.add_argument("--limit", type=int, default=20)
+
+    rw = add("raw", None, "raw links (files_sharing_raw)").add_subparsers(dest="raw_cmd", metavar="<action>")
+    s = rw.add_parser("get", help="raw state of a link share"); s.set_defaults(fn=cmd_raw_get); s.add_argument("share_id")
+    s = rw.add_parser("enable", help="enable raw serving for a link share"); s.set_defaults(fn=cmd_raw_enable); s.add_argument("share_id"); s.add_argument("--preset", choices=list(CSP_PRESETS), help="CSP preset (site|cdn|embed|asset|locked)"); s.add_argument("--csp", help="explicit CSP string ('' clears)"); s.add_argument("--raw-only", action="store_true", help="also hide the normal /s/<token> page"); s.add_argument("--no-raw-only", action="store_true")
+    s = rw.add_parser("disable", help="disable raw serving"); s.set_defaults(fn=cmd_raw_disable); s.add_argument("share_id")
+    s = rw.add_parser("list", help="raw-enabled link shares of a path"); s.set_defaults(fn=cmd_raw_list); s.add_argument("path")
+    s = rw.add_parser("url", help="print the raw URL of a share (+ optional sub path)"); s.set_defaults(fn=cmd_raw_url); s.add_argument("share_id"); s.add_argument("path", nargs="?")
+    s = rw.add_parser("presets", help="show CSP presets"); s.set_defaults(fn=cmd_raw_presets)
+
+    s = add("user", cmd_user, "users (admin): list|get|create|set|enable|disable|delete|groups|addgroup|rmgroup"); s.add_argument("action", choices=["list", "get", "create", "set", "enable", "disable", "delete", "groups", "addgroup", "rmgroup"]); s.add_argument("uid", nargs="?"); s.add_argument("--search"); s.add_argument("--limit", type=int, default=200); s.add_argument("--password"); s.add_argument("--display-name"); s.add_argument("--email"); s.add_argument("--quota"); s.add_argument("--group", action="append"); s.add_argument("--key"); s.add_argument("--value"); s.add_argument("--gid"); s.add_argument("--yes", action="store_true")
+    s = add("group", cmd_group, "groups (admin): list|members|create|delete"); s.add_argument("action", choices=["list", "members", "create", "delete"]); s.add_argument("gid", nargs="?"); s.add_argument("--search"); s.add_argument("--yes", action="store_true")
+    s = add("app", cmd_app, "apps (admin): list|info|enable|disable"); s.add_argument("action", choices=["list", "info", "enable", "disable"]); s.add_argument("appid", nargs="?"); s.add_argument("--filter", choices=["enabled", "disabled"]); s.add_argument("--yes", action="store_true")
+    s = add("notifications", cmd_notifications, "notifications: list|delete <id>|clear --yes"); s.add_argument("action", choices=["list", "delete", "clear"]); s.add_argument("id", nargs="?"); s.add_argument("--yes", action="store_true")
+    s = add("activity", cmd_activity, "activity stream"); s.add_argument("--filter", help="all|by|self|files|favorites|... (activity filter id)"); s.add_argument("--limit", type=int, default=30); s.add_argument("--object-type"); s.add_argument("--object-id"); s.add_argument("--since")
+    s = add("webhook", cmd_webhook, "webhook_listeners (admin): list|create|delete"); s.add_argument("action", choices=["list", "create", "delete"]); s.add_argument("id", nargs="?"); s.add_argument("--uri"); s.add_argument("--event", help="e.g. OCP\\Files\\Events\\Node\\NodeWrittenEvent"); s.add_argument("--method", default="POST"); s.add_argument("--filter", help="JSON eventFilter"); s.add_argument("--user-filter"); s.add_argument("--headers", help="JSON object"); s.add_argument("--auth-method", choices=["none", "header"]); s.add_argument("--auth-data", help="JSON object"); s.add_argument("--yes", action="store_true")
+
+    s = add("occ", cmd_occ, "run occ (local docker exec or ssh); read-only allow-list runs as is, anything else needs --yes; e.g. ncloud occ -- status --output=json"); s.add_argument("args", nargs=argparse.REMAINDER); s.add_argument("--yes", action="store_true"); s.add_argument("--stdin", action="store_true", help="forward stdin (files:put -)"); s.add_argument("--print-only", action="store_true")
+    s = add("mcp", cmd_mcp, "on-demand MCP sidecar: create | start | stop | status | credential [--write] | snippet --runtime generic|claude|mcporter"); s.add_argument("action", choices=["create", "start", "stop", "status", "credential", "snippet"]); s.add_argument("--runtime", default="generic", choices=["generic", "claude", "mcporter"]); s.add_argument("--url", help="MCP endpoint (default: NEXTCLOUD_MCP_URL, else derived from the sidecar settings)"); s.add_argument("--id", default="nextcloud"); s.add_argument("--write", action="store_true", help="credential: write the base64 secret file"); s.add_argument("--recreate", action="store_true", help="create: replace an existing container (needs --yes)"); s.add_argument("--yes", action="store_true"); s.add_argument("--print-only", action="store_true", help="create: print the docker command only")
+    s = add("call", cmd_call, "escape hatch: raw HTTP call with auth (-d k=v, --json FILE, --body-file FILE); foreign hosts only with --no-auth"); s.add_argument("method"); s.add_argument("path"); s.add_argument("--no-auth", action="store_true", help="send without Authorization (required for other hosts)"); s.add_argument("--yes", action="store_true", help="confirm DELETE"); s.add_argument("-d", "--data", action="append"); s.add_argument("--json", dest="json_file"); s.add_argument("--body-file"); s.add_argument("-H", "--header", action="append"); s.add_argument("--no-ocs", dest="ocs", action="store_false"); s.add_argument("-i", "--headers-out", action="store_true")
+    s = add("config", cmd_config, "settings file: init --url --user [--app-password --occ-ssh-host] | path | show | notes"); s.add_argument("action", choices=["init", "path", "show", "notes"]); s.add_argument("--url"); s.add_argument("--user", dest="user_"); s.add_argument("--app-password"); s.add_argument("--occ-ssh-host"); s.add_argument("--force", action="store_true")
+    s = add("app-password", cmd_app_password, "mint a new app password via occ user:auth-tokens:add (no login password needed; needs --yes)"); s.add_argument("name"); s.add_argument("--uid"); s.add_argument("--json", action="store_true"); s.add_argument("--yes", action="store_true")
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    a = parser.parse_args(argv)
+    if not getattr(a, "fn", None):
+        parser.print_help()
+        return 0
+    cfg = Config(a)
+    if cfg.env_error and a.fn not in (cmd_config, cmd_doctor):
+        die(cfg.env_error, 2)
+    if cfg.missing() and a.fn not in (cmd_config, cmd_doctor, cmd_mcp, cmd_occ):
+        die(f"{', '.join(cfg.missing())} not set: export it or run `ncloud config init --url ... --user ...` ({env_file_candidates()[0]})", 2)
+    c = Client(cfg)
+    try:
+        a.fn(c, a)
+    except NcError as e:
+        print(f"error: {e}", file=sys.stderr)
+        if e.status == 401:
+            print("hint: 401 -> wrong/revoked app password, or bruteforce throttling (check `ncloud occ security:bruteforce:attempts <ip>`)", file=sys.stderr)
+        elif e.status == 503:
+            print("hint: 503 -> maintenance mode? `ncloud occ maintenance:mode`", file=sys.stderr)
+        return 3
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

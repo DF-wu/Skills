@@ -1,0 +1,35 @@
+{
+  "skill_name": "filehost",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I built a landing page in ./dist. Give me a URL I can open directly - the JavaScript has to work.",
+      "expected_output": "Runs scripts/filehost publish ./dist --name <slug> (site preset applied automatically), reports the /raw/<token>/index.html URL, mentions the 5-minute cache and how to update/unpublish; verification shows HTTP 200 and matching content.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Put chart.png online and give me an image link I can paste straight into a chat message.",
+      "expected_output": "Single-file publish (scripts/filehost publish ./chart.png), returns the /raw/<token> URL with the image/png content-type verified.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "The demo site I published earlier has changed. Re-upload ./dist, but the URL must stay the same.",
+      "expected_output": "Re-runs publish with the same --name (share reused, token unchanged); if stale remote files should go, previews with --prune --dry-run and only then uses --prune --yes (--prune without --yes is refused); confirms the URL is identical; warns about the 5-minute cache.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Add a password and an expiry date to the public share link of my /Photos folder.",
+      "expected_output": "Near-miss negative: this is private share management -> nextcloud-use (ncloud share update with --password/--expire), not filehost; notes that raw links ignore share passwords.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "I published a folder full of images, but opening /raw/<token> only shows null. Is it broken?",
+      "expected_output": "Explains this is expected: a folder share without index.html answers 200 application/json with body null at /raw/<token> (not a 404, the share is fine); files are served at /raw/<token>/<file> (scripts/filehost url <name> <file>); publish's url (and filehost list's url, with has_index false) already points at the first file. Suggests adding an index.html only if a landing page is wanted. Does not unpublish or recreate the share.",
+      "files": []
+    }
+  ]
+}
